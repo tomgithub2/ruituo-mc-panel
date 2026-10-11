@@ -356,5 +356,12 @@ def _engine_reason(running, plugin, rcon_ready, available) -> str:
     if plugin != 'none' and rcon_ready:
         return f'实例运行中且已装插件（{plugin}）→ 引擎 A（RCON 下发 //schem load + //paste）'
     if not rcon_ready:
-        return '实例运行中但未开启 RCON：请开启 RCON 后重试，或停止实例走离线导入'
-    return '实例运行中且未安装 WorldEdit：请停止实例走离线导入，或安装 WorldEdit 后重试'
+        # ⚠️ 别说成"只能停服"：实例不停机也有正路 —— 开启 RCON 就能走原版 /place template
+        #    （引擎 C：不需要任何插件，也不需要关服）。这条提示以前漏了它，
+        #    用户看到"请停止实例"就以为没有免重启的办法了。
+        return ('实例运行中但未开启 RCON：两个选择 —— ① 在「实例详情 → 配置」里开启 RCON 后重试，'
+                '即可用引擎 C（原版 /place template，无需插件、无需停服）；'
+                '② 或停止实例走离线导入（引擎 B）')
+    return ('实例运行中且未安装 WorldEdit：三个选择 —— ① 直接用引擎 C（原版 /place template，'
+            '无需插件、无需停服）；② 停止实例走离线导入（引擎 B）；'
+            '③ 或安装 WorldEdit 后用引擎 A')

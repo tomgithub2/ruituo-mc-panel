@@ -78,6 +78,40 @@ def eula_status(row: dict) -> dict:
             'raw': text[:800]}
 
 
+def clear_empty_rcon_keys(row: dict) -> dict:
+    """把 server.properties 里**值为空的** `rcon.password` / `rcon.port` / `enable-rcon` 键去掉。
+
+    为什么要这一步：`init_server_properties()` 的约定是"只补**缺键**、绝不覆盖用户已有值"，
+    于是值为空的 `rcon.password=`（键在、值是空）会被当成"已设置"而**跳过**，
+    结果开的 RCON 永远落不到文件里 —— 实测踩到：库里 `rcon_enabled=1` 但
+    `server.properties` 里密码是空、端口还是 25565，服务端根本不监听 RCON，
+    「免插件免停服导入」（引擎 C 靠 RCON 下发 `/place template`）因此用不了。
+
+    这里**只清空值**，不动用户手工填过的非空值（保持"不覆盖用户值"的原则）。
+    """
+    from . import mcprops
+    path = os.path.join(workdir_of(row), 'server.properties')
+    model = mcprops.read_props(path)
+    if not model.get('exists'):
+        return {'ok': True, 'cleared': [], 'note': 'server.properties 还不存在'}
+    props = dict(model.get('props') or {})
+    # 找出"键在但值为空"的
+    empty = [k for k in ('rcon.password', 'rcon.port', 'enable-rcon')
+             if k in props and str(props.get(k) or '').strip() == '']
+    if not empty:
+        return {'ok': True, 'cleared': [], 'note': '无空 RCON 键'}
+    try:
+        text = io.open(path, 'r', encoding='utf-8', errors='replace').read()
+        for key in empty:
+            # 连带注释行一起删，避免留下孤立的 '#' 说明行
+            text = re.sub(r'^\s*#?\s*%s\s*=.*\n?' % re.escape(key), '', text, flags=re.M)
+        io.open(path, 'w', encoding='utf-8', newline='\n').write(text)
+    except Exception as e:                                 # noqa: BLE001
+        return {'ok': False, 'cleared': empty, 'error': str(e)}
+    return {'ok': True, 'cleared': empty,
+            'note': '已清掉空的 RCON 键：%s' % '、'.join(empty)}
+
+
 def init_server_properties(row: dict, port=None, rcon_enabled=None, rcon_port=None,
                            rcon_password=None, motd: str = '') -> dict:
     """把面板里的端口 / RCON 设置落到 server.properties。

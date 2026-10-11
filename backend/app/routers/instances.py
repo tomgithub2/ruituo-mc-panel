@@ -372,9 +372,51 @@ def update_instance(iid: int, body: UpdateIn, request: Request,
         return {'ok': True, 'changed': []}
     args.append(iid)
     execute(f'UPDATE instances SET {", ".join(fields)} WHERE id=?', tuple(args))
+    # ⚠️ RCON / 端口这类「要进 server.properties 才生效」的字段，光写库是不够的。
+    #    实测踩到：通过 API 开了 RCON、库里 rcon_enabled=1，但 server.properties 里
+    #    `rcon.password=` 仍是空、`rcon.port` 仍是 25565 → 服务端根本不监听 RCON，
+    #    于是「免插件免停服导入」（引擎 C，靠 RCON 下发 /place template）用不了。
+    #    成因：init_server_properties() 的约定是"只补缺键、不覆盖已有值"，
+    #    而**空值也算"键存在"**，所以永远补不上 → 先清空键再让它补。
+    #    另外：**服务端运行中会在退出时回写 server.properties**，此时写盘会被覆盖，
+    #    所以只在实例停止时落盘，运行中则明确提示「下次启动生效」。
+    props_note = ''
+    if any(k in changed for k in ('rcon_enabled', 'rcon_port', 'rcon_password', 'port')):
+        row2 = _row_or_404(iid)
+        if int(row2.get('pid') or 0):
+            props_note = '实例正在运行：这些设置会在下次启动时写入 server.properties 并生效'
+        else:
+            try:
+                cl = serverctl.clear_empty_rcon_keys(row2)
+                r = serverctl.init_server_properties(
+                    row2, rcon_enabled=int(row2.get('rcon_enabled') or 0),
+                    rcon_port=row2.get('rcon_port'), rcon_password=row2.get('rcon_password'))
+                notes = [(cl or {}).get('note'), r.get('note')]
+                # ⚠️ 用户**显式改过**的字段必须强制写盘：init_server_properties() 的约定是
+                #    "只补缺键、不覆盖已有值"，所以像 `rcon.port=25565`（服务端默认值，
+                #    但面板里是 25575）这种"有值但不对"的情况它不会改 —— 实测踩到。
+                #    这里只对本次 PATCH 明确提交的键做覆盖，不碰其它键。
+                from .. import mcprops
+                force = {}
+                if 'rcon_port' in changed:
+                    force['rcon.port'] = str(int(row2.get('rcon_port') or 25575))
+                if 'rcon_password' in changed and row2.get('rcon_password'):
+                    force['rcon.password'] = str(row2.get('rcon_password'))
+                if 'rcon_enabled' in changed:
+                    force['enable-rcon'] = 'true' if int(row2.get('rcon_enabled') or 0) else 'false'
+                if 'port' in changed:
+                    force['server-port'] = str(int(row2.get('port') or 25565))
+                if force:
+                    wp = os.path.join(serverctl.workdir_of(row2), 'server.properties')
+                    wr = mcprops.write_props(wp, force)
+                    notes.append('已按本次修改强制写入 %s' % '、'.join(sorted(force)))
+                props_note = '；'.join(x for x in notes if x)
+            except Exception as e:                            # noqa: BLE001
+                props_note = f'写入 server.properties 失败：{e}'
     audit_mod.audit(user['username'], request.client.host if request.client else '',
                     'instance.update', iid, f'修改实例配置：{", ".join(changed)}')
-    return {'ok': True, 'changed': changed, 'instance': _decorate(_row_or_404(iid))}
+    return {'ok': True, 'changed': changed, 'props_note': props_note,
+            'instance': _decorate(_row_or_404(iid))}
 
 
 # ---------------------------------------------------------------- 生命周期

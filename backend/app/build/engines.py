@@ -491,13 +491,40 @@ def _import_vanilla_place(task, sch, inst, report, progress, check_cancel):
         raise RuntimeError('实例未开启 RCON，无法使用原版 /place template 路径')
     root = instance_dir(inst)
     world_root = anvil.world_dir(root, task.dimension)
-    ns_dir = os.path.join(world_root, 'generated', 'minecraft', 'structures')
+    ns = 'mcpanel'
+    name = 'p' + task.id[:10]
+    # ⚠️ 关键：结构必须放进**数据包**里，不能放进 world/generated/minecraft/structures/。
+    #    实测（1.21.x 原版服务端，实例全程运行中）：
+    #      · 写进 generated/… 后直接 /place template → `Unknown structure`（服务端只在
+    #        **启动时**扫描那个目录，运行中写进去不认，等于偷偷要求重启一次）；
+    #      · 写进 `world/datapacks/<pack>/data/<ns>/structure/<name>.nbt` 再 `/reload`
+    #        → `/place template <ns>:<name>` 成功，返回 `Loaded template "…" at x, y, z`
+    #        （原版权威确认），**全程不需要重启服务端** —— 这才是真正的"免插件免停服"。
+    dc = get_config()
+    cfg_dir = str((dc or {}).get('datapack_dir') or 'mcpanel_hot').strip() or 'mcpanel_hot'
+    safe_dir = ''.join(c for c in cfg_dir if c.isalnum() or c in '-_.') or 'mcpanel_hot'
+    pack_dir = os.path.join(world_root, 'datapacks', safe_dir)
+    ns_dir = os.path.join(pack_dir, 'data', ns, 'structure')
     os.makedirs(ns_dir, exist_ok=True)
-    name = 'mcpanel_' + task.id[:10]
     nbt_path = os.path.join(ns_dir, name + '.nbt')
     write_vanilla_structure(sch, nbt_path)
+    meta_path = os.path.join(pack_dir, 'pack.mcmeta')
+    if not os.path.isfile(meta_path):
+        try:
+            with open(meta_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write('{"pack":{"pack_format":48,"description":"mcpanel hot import"}}')
+        except Exception:
+            pass
+    # 清理过期结构：这个数据包是面板专用的，只保留最近 20 个，避免无限膨胀
+    try:
+        olds = sorted((os.path.join(ns_dir, f) for f in os.listdir(ns_dir)
+                       if f.endswith('.nbt')), key=os.path.getmtime, reverse=True)
+        for old in olds[20:]:
+            os.remove(old)
+    except Exception:
+        pass
     progress(task, stage=tasks.ST_WRITING,
-             message=f'结构文件已放入 {nbt_path}')
+             message=f'结构已写入数据包 {nbt_path}（将用 /reload 热加载）')
 
     if task.do_backup:
         paths = [anvil.region_path(world_root, task.dimension, cx * 16, cz * 16)
@@ -508,9 +535,11 @@ def _import_vanilla_place(task, sch, inst, report, progress, check_cancel):
     cx0, cz0 = anvil.chunk_of(report['bbox']['min'][0]), anvil.chunk_of(report['bbox']['min'][2])
     cx1, cz1 = anvil.chunk_of(report['bbox']['max'][0]), anvil.chunk_of(report['bbox']['max'][2])
     out = []
+    # ① 先 /reload 让服务端重新扫描数据包 —— 没有这一步，刚写进去的结构不会被认到
+    #    （实测：不 reload 会报 Unknown structure）。/reload 只重载数据包，不会重启服务器。
+    cmds = ['reload']
     # /forceload 单次最多 256 个区块（实测："Too many chunks in the specified area
     # (maximum 256, ...)"），所以按 256 分块下发
-    cmds = []
     row = 0
     cz = cz0
     while cz <= cz1:
@@ -523,7 +552,8 @@ def _import_vanilla_place(task, sch, inst, report, progress, check_cancel):
             break
     rot = PLACE_ROT.get(int(task.rotate) % 360, 'none')
     mir = PLACE_MIRROR.get(str(task.mirror or 'none').lower(), 'none')
-    place = f'place template {name} {task.origin[0]} {task.origin[1]} {task.origin[2]} {rot}'
+    # 数据包里的结构是带命名空间的（<ns>:<name>），不能只写裸名字
+    place = f'place template {ns}:{name} {task.origin[0]} {task.origin[1]} {task.origin[2]} {rot}'
     if mir != 'none':
         place += f' {mir}'
     cmds.append(place)

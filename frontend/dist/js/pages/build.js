@@ -69,8 +69,12 @@ window.PagesBuild = (function () {
             ? C.statusBadge('running', '实例运行中')
             : C.statusBadge('stopped', '实例已停止')) +
         '</div></div>' +
-        '<div class="tip mb">两套引擎：<b>引擎 A（插件 + RCON）</b>实例运行中即可用，需要装 WorldEdit 并开启 RCON；' +
-        '<b>引擎 B（离线写 Anvil 区块）</b>无插件依赖，但<b>必须先停止实例</b>。' +
+        '<div class="tip mb">三套引擎：' +
+        '<b>引擎 A（插件 + RCON）</b>实例运行中即可用，需要装 WorldEdit 并开启 RCON；' +
+        '<b>引擎 B（离线写 Anvil 区块）</b>无插件依赖，但<b>必须先停止实例</b>；' +
+        '<b>引擎 C（原版 /place template）</b><b>无需任何插件、也无需停服</b>——' +
+        '面板把建筑写成原版结构文件，再用服务端自带的 <span class="mono">/place template</span> 放进去，' +
+        '只要实例<b>开着 RCON</b>且<b>正在运行</b>就可用。' +
         '面板按后端给出的 <span class="mono">engine_recommended</span> 预选，你也可以手动改。</div>';
     }
 
@@ -113,7 +117,14 @@ window.PagesBuild = (function () {
     function optionsCard(canImport) {
       var rep = st.rep || {};
       var avail = rep.engine_available || [];
-      var ENGINE_NAME = { plugin: '引擎 A · 插件 + RCON', offline: '引擎 B · 离线写区块' };
+      /* 引擎短名。⚠️ 必须与后端 plan.py 的 engine 标识一致：
+       plugin / offline / vanilla_place —— 少一个就会出现"后端推荐了、
+       UI 却连名字都显示不出来、按钮也点不了"的情况（vanilla_place 就漏过）。 */
+    var ENGINE_NAME = {
+      plugin: '引擎 A · 插件 + RCON',
+      offline: '引擎 B · 离线写区块',
+      vanilla_place: '引擎 C · 原版免插件'
+    };
       return '<div class="card" style="height:100%">' +
         '<div class="card-head"><h3>2. 坐标与选项</h3>' +
           '<div class="right"><span class="mono small">' +
@@ -153,7 +164,7 @@ window.PagesBuild = (function () {
           '<label class="check"><input type="checkbox" id="b-bio"' + (st.include_biome ? ' checked' : '') + ' />包含生物群系</label>' +
         '</div>' +
         '<div class="field"><label>执行引擎</label>' +
-          '<div class="row tight">' + ['plugin', 'offline'].map(function (e) {
+          '<div class="row tight">' + ['plugin', 'vanilla_place', 'offline'].map(function (e) {
             var ok = avail.indexOf(e) >= 0;
             var rec = rep.engine_recommended === e;
             return '<button class="btn sm' + (st.engine === e ? ' primary' : '') + '"' + (ok ? '' : ' disabled ') +
