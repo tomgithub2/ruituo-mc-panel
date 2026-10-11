@@ -710,7 +710,13 @@ class Manager:
                         if tps_v is None and mspt_v is None:
                             try:
                                 from .rcon import collect_tps
-                                t = collect_tps(row)
+                                # ⚠️ TTL 给 25 秒（采样间隔是 5 秒）：
+                                #    采样器每 5 秒跑一次，若每次都去 RCON 取新 TPS，
+                                #    就是「每 5 秒一条 RCON 连接」—— 服务端控制台会被
+                                #    `Thread RCON Client ... started / shutting down` 刷屏
+                                #    （用户实测反馈）。TPS 是慢变量，25 秒缓存完全够用，
+                                #    CPU/内存仍按采样间隔更新。
+                                t = collect_tps(row, ttl=25.0)
                                 if t.get('available'):
                                     tps_v = t.get('tps') or tps_v
                                     mspt_v = t.get('mspt') or mspt_v
