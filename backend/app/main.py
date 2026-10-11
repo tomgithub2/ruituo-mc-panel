@@ -170,10 +170,11 @@ async def unhandled_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------- 路由注册
 from .routers import (auth as auth_router, backups, build as build_router,  # noqa: E402
                       config as config_router, core, cron, files, instances,
-                      logs as logs_router, players, plugins, settings, users)
+                      logs as logs_router, players, plugins, settings, update as update_router,
+                      users)
 
 for mod in (auth_router, settings, core, instances, config_router, files, players,
-            backups, cron, plugins, logs_router, build_router, users):
+            backups, cron, plugins, logs_router, build_router, users, update_router):
     app.include_router(mod.router)
 
 # 仪表盘实时通道（`/api/dashboard/ws`）：独立前缀，不落在 `/api/instances/{iid}` 命名空间里

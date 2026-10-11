@@ -5,4 +5,5 @@ python-multipart>=0.0.9
 websockets>=12.0
 pydantic>=2.6
 httpx>=0.27
-
+# 远程更新的清单 RSA 验签（缺失会导致更新功能不可用）
+cryptography>=41.0
