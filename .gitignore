@@ -13,6 +13,11 @@
 *.key
 *.pem
 *.p12
+# ⚠️ 例外：厂商「更新签名公钥」必须随源码发布。
+#    更新客户端要拿它验签（`updater.verify_manifest()`），没有它更新功能直接不可用。
+#    公钥不是秘密（本来就要公开给所有使用者），*.pem 这条只是为了挡私钥。
+#    这里漏掉过：v0.2.1 的发行包里没有这个文件 → 等于发了一个更新功能不可用的包。
+!backend/app/license_public.pem
 secret.key
 **/secret.key
 .env

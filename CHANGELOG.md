@@ -3,6 +3,14 @@
 本文件记录芮拓MC开服面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.2] - 2026-10-11
+
+### 修复
+- **发行包里缺少「更新签名公钥」** —— `.gitignore` 的 `*.pem` 本意是挡私钥，
+  却把 `backend/app/license_public.pem`（**必须随源码公开**，更新验签要用）一起排除了。
+  结果是 v0.2.1 的包**更新功能直接不可用**。已在 `.gitignore` 里为该文件加白名单例外，
+  并把它纳入版本管理。
+
 ## [0.2.1] - 2026-10-11
 
 ### 新增
