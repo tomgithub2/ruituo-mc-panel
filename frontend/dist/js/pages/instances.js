@@ -226,7 +226,7 @@ Pages.instances = function (app) {
       statBlock('在线玩家', String(players), '所有实例合计') +
       statBlock('进程内存', Math.round(mem) + ' MB', '实际 RSS 合计') +
       statBlock('平均 TPS', tps === null ? '不可用' : tps.toFixed(1),
-        tps === null ? '日志未输出 TPS 且未启用 RCON' : tpsList.length + ' 个实例有数据');
+        tps === null ? '所有实例都没取到 TPS（需运行中且 RCON 可用）' : tpsList.length + ' 个实例有数据');
     document.getElementById('head-sub').textContent =
       data.length + ' 个实例 · ' + running + ' 个运行中' + (filter ? ' · 已过滤 ' + list.length + ' 条' : '');
 

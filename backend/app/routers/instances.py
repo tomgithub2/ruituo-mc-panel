@@ -117,12 +117,13 @@ def _decorate(row: dict) -> dict:
     #    仍然取不到就如实报不可用 —— **绝不编造数值**。
     if not st['tps_available'] and st['running']:
         try:
-            from ..rcon import collect_tps
+            from ..rcon import collect_tps, mspt_scalar, tps_scalar
             t = collect_tps(row)
             if t.get('available'):
-                out['tps'] = t.get('tps') or out['tps']
-                out['mspt'] = t.get('mspt') or out['mspt']
-                out['tps_available'] = bool(t.get('tps') or t.get('mspt'))
+                # 契约是数字（前端 Number(it.tps)），必须归一成标量，否则显示 NaN
+                out['tps'] = tps_scalar(t.get('tps'))
+                out['mspt'] = mspt_scalar(t.get('mspt'))
+                out['tps_available'] = out['tps'] is not None or out['mspt'] is not None
                 out['tps_source'] = t.get('source')
         except Exception as e:
             # 不静默：取不到 TPS 的原因要能在日志里看到（否则只能靠猜）
@@ -213,13 +214,18 @@ def status(iid: int, user: dict = Depends(get_current_user)):
     #    仪表盘 1 秒轮询也不会打爆服务端）；真的取不到就如实报不可用，**不编造数值**。
     if not st.get('tps_available') and st.get('running'):
         try:
-            from ..rcon import collect_tps
+            from ..rcon import collect_tps, mspt_scalar, tps_scalar
             t = collect_tps(row)
             if t.get('available'):
-                st['tps'] = t.get('tps') or st.get('tps')
-                st['mspt'] = t.get('mspt') or st.get('mspt')
-                st['tps_available'] = bool(t.get('tps') or t.get('mspt'))
+                # ⚠️ 前端用的是 `Number(st.tps).toFixed(1)` —— **契约是数字**。
+                #    这里必须归一成标量；直接塞 dict 会渲染成 `NaN`
+                #    （实测踩过：TPS/MSPT 都显示 NaN）。多窗口对象由
+                #    `GET /{iid}/tps` 提供。
+                st['tps'] = tps_scalar(t.get('tps'))
+                st['mspt'] = mspt_scalar(t.get('mspt'))
+                st['tps_available'] = st['tps'] is not None or st['mspt'] is not None
                 st['tps_source'] = t.get('source')
+                st['tps_detail'] = t.get('tps')      # 多窗口明细，前端可选展示
         except Exception as e:
             logger.warning('实例 %s 通过 RCON 取 TPS 失败：%s', iid, e)
     return st
