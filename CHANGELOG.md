@@ -3,6 +3,18 @@
 本文件记录芮拓MC开服面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.3] - 2026-10-11
+
+### 修复
+- **实例启停的审计日志不记录操作者 IP**（`instance.start` / `stop` / `kill` 的 `ip` 恒为空），
+  而文件操作等审计都记录了 —— 事后追查「谁停的服」时缺少关键线索。
+  现在把客户端 IP 从路由一路透传到 `process_manager` 的审计调用；
+  系统触发的操作（崩溃自动重启 `by='auto-restart'`）与无用户上下文的清理（`forget()`）保持留空。
+- 修正 `_stop_external()`（面板重启后接管外部实例的停止路径）引用未定义 `ip` 的问题。
+
+### 说明
+- v0.2.2 的发行包已包含更新签名公钥（`backend/app/license_public.pem`），本版在其基础上继续。
+
 ## [0.2.2] - 2026-10-11
 
 ### 修复

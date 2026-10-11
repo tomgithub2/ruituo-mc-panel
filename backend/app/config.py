@@ -30,7 +30,7 @@ SECRET_FILE = os.path.join(DATA_DIR, 'secret.key')
 
 _lock = threading.RLock()
 
-PANEL_VERSION = '0.2.2'
+PANEL_VERSION = '0.2.3'
 
 DEFAULTS = {
     'port': 8100,

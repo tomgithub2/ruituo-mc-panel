@@ -474,7 +474,9 @@ def start(iid: int, request: Request, user: dict = Depends(get_current_user)):
             status_code=409,
             detail=f'核心仍在下载中（{pct}%），请稍候；下载完成后即可启动。'
                    f'（任务 {act.get("id")}，可在下载列表查看进度）')
-    r = manager.start(iid, by=user['username'])
+    ip = request.client.host if request.client else ''
+    # 记下操作者 IP：与 file.write 等审计一致，便于事后追查「谁停的/谁启的」
+    r = manager.start(iid, by=user['username'], ip=ip)
     if not r.get('ok'):
         raise HTTPException(status_code=400, detail=r.get('error', '启动失败'))
     return r
@@ -483,20 +485,23 @@ def start(iid: int, request: Request, user: dict = Depends(get_current_user)):
 @router.post('/{iid}/stop')
 def stop(iid: int, request: Request, user: dict = Depends(get_current_user)):
     require_instance(user, iid, perms.P_INSTANCE_STOP)
-    return manager.stop(iid, by=user['username'])
+    ip = request.client.host if request.client else ''
+    return manager.stop(iid, by=user['username'], ip=ip)
 
 
 @router.post('/{iid}/restart')
 def restart(iid: int, request: Request, user: dict = Depends(get_current_user)):
     require_instance(user, iid, perms.P_INSTANCE_START)
     require_instance(user, iid, perms.P_INSTANCE_STOP)
-    return manager.restart(iid, by=user['username'])
+    ip = request.client.host if request.client else ''
+    return manager.restart(iid, by=user['username'], ip=ip)
 
 
 @router.post('/{iid}/kill')
 def kill(iid: int, request: Request, user: dict = Depends(get_current_user)):
     require_instance(user, iid, perms.P_INSTANCE_STOP)
-    return manager.kill(iid, by=user['username'])
+    ip = request.client.host if request.client else ''
+    return manager.kill(iid, by=user['username'], ip=ip)
 
 
 @router.post('/{iid}/command')

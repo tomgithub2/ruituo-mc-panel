@@ -327,7 +327,7 @@ class Manager:
             pass
         return info
 
-    def start(self, inst_id: int, by: str = 'panel') -> dict:
+    def start(self, inst_id: int, by: str = 'panel', ip: str = '') -> dict:
         inst = self.get(inst_id)
         with inst.lock:
             row = inst.db()
@@ -399,7 +399,7 @@ class Manager:
             threading.Thread(target=self._watch, args=(inst, proc), daemon=True).start()
             inst.push(f'[面板] 启动命令：{" ".join(cmd)}')
             inst.push(f'[面板] 工作目录：{workdir}')
-            audit_mod.audit(by, '', 'instance.start', inst.id,
+            audit_mod.audit(by, ip, 'instance.start', inst.id,
                             f'启动实例 {row["name"]}（PID {proc.pid}）')
             return {'ok': True, 'pid': proc.pid}
 
@@ -481,7 +481,7 @@ class Manager:
         threading.Thread(target=_later, daemon=True).start()
 
     # ------------------------------------------------------------ 停止
-    def stop(self, inst_id: int, by: str = 'panel', timeout: int = 30) -> dict:
+    def stop(self, inst_id: int, by: str = 'panel', timeout: int = 30, ip: str = '') -> dict:
         inst = self.get(inst_id)
         row = inst.db()
         proc = inst.proc
@@ -492,7 +492,7 @@ class Manager:
                 inst.status = ST_STOPPED
                 execute('UPDATE instances SET status=?, pid=0 WHERE id=?', (ST_STOPPED, inst.id))
                 return {'ok': True, 'note': '实例本就未运行'}
-            return self._stop_external(inst, pid, by, timeout)
+            return self._stop_external(inst, pid, by, timeout, ip=ip)
         with inst.lock:
             inst.stop_requested = True
             inst.status = ST_STOPPING
@@ -507,10 +507,10 @@ class Manager:
             return {'ok': True, 'graceful': True}
         except subprocess.TimeoutExpired:
             inst.push(f'[面板] {timeout} 秒内未退出，强制结束进程树', 'panel')
-            self.kill(inst_id, by=by)
+            self.kill(inst_id, by=by, ip=ip)
             return {'ok': True, 'graceful': False}
 
-    def _stop_external(self, inst: Instance, pid: int, by: str, timeout: int) -> dict:
+    def _stop_external(self, inst: Instance, pid: int, by: str, timeout: int, ip: str = '') -> dict:
         """面板重启后接管的外部进程：无 stdin，只能尝试 RCON stop 再 kill。"""
         row = inst.db()
         cfg = get_config()
@@ -532,7 +532,7 @@ class Manager:
         inst.status = ST_STOPPED
         inst.pid = 0
         inst.push('[面板] 外部进程已结束', 'panel')
-        audit_mod.audit(by, '', 'instance.stop', inst.id, '停止接管的外部实例')
+        audit_mod.audit(by, ip, 'instance.stop', inst.id, '停止接管的外部实例')
         return {'ok': True, 'graceful': False, 'note': '接管实例已强制结束'}
 
     def _kill_pid(self, pid: int):
@@ -547,7 +547,7 @@ class Manager:
         except Exception:
             pass
 
-    def kill(self, inst_id: int, by: str = 'panel') -> dict:
+    def kill(self, inst_id: int, by: str = 'panel', ip: str = '') -> dict:
         inst = self.get(inst_id)
         proc = inst.proc
         inst.stop_requested = True
@@ -575,13 +575,13 @@ class Manager:
                 os.remove(inst.pid_file)
         except Exception:
             pass
-        audit_mod.audit(by, '', 'instance.kill', inst.id, '强制结束实例进程')
+        audit_mod.audit(by, ip, 'instance.kill', inst.id, '强制结束实例进程')
         return {'ok': True}
 
-    def restart(self, inst_id: int, by: str = 'panel') -> dict:
-        self.stop(inst_id, by=by)
+    def restart(self, inst_id: int, by: str = 'panel', ip: str = '') -> dict:
+        self.stop(inst_id, by=by, ip=ip)
         time.sleep(1.5)
-        return self.start(inst_id, by=by)
+        return self.start(inst_id, by=by, ip=ip)
 
     # ------------------------------------------------------------ stdin
     def send_command(self, inst_id: int, cmd: str) -> dict:
