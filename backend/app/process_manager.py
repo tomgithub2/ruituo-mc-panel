@@ -9,6 +9,7 @@
     auto_restart 打开则指数退避重启，超过上限提示并停止。
 """
 import codecs
+import logging
 import collections
 import os
 import re
@@ -21,6 +22,8 @@ import time
 import psutil
 
 from .config import get_config, instance_dir
+
+logger = logging.getLogger('mcpanel.monitor')
 from .database import execute, now, query
 from . import audit as audit_mod
 
@@ -691,13 +694,40 @@ class Manager:
                         st = self.status(inst.id)
                         if not st['running'] and st['status'] == ST_STOPPED:
                             continue
+                        # ⚠️ 内存里的 tps 只来自「解析服务端日志」，而**有的服务端根本不把
+                        #    TPS 写进日志**（实测 Purpur 26.x 就不写）—— 于是指标表里的
+                        #    tps/mspt 永远是 NULL，监控曲线一直是空的「TPS 不可用」，
+                        #    **哪怕面板已经能通过 RCON 取到真实数据**。
+                        #    这里回退到 RCON 取一次（collect_tps 自带 5 秒缓存，
+                        #    采样间隔通常 ≥5 秒，不会打爆服务端）；取不到仍写 NULL，
+                        #    **绝不编造数值**。
+                        tps_v, mspt_v = st['tps'], st['mspt']
+                        if tps_v is None and mspt_v is None:
+                            try:
+                                from .rcon import collect_tps
+                                t = collect_tps(row)
+                                if t.get('available'):
+                                    tps_v = t.get('tps') or tps_v
+                                    mspt_v = t.get('mspt') or mspt_v
+                            except Exception as e:
+                                logger.warning('实例 %s RCON 取 TPS 失败：%s', inst.id, e)
+                        # ⚠️ metrics.tps/mspt 是 REAL 列（单个数），而上面拿到的是
+                        #    {'1m':..,'5m':..,'15m':..} 这种 dict —— 直接传给 sqlite3 会
+                        #    报 `Error binding parameter N - probably unsupported type`，
+                        #    **整条采样都写不进去**（实测：曲线长时间空白）。必须归一成标量。
+                        from .rcon import tps_scalar, mspt_scalar
+                        tps_v = tps_scalar(tps_v)
+                        mspt_v = mspt_scalar(mspt_v)
                         execute('INSERT INTO metrics (instance_id, ts, cpu, mem_mb, players, tps, mspt) '
                                 'VALUES (?,?,?,?,?,?,?)',
                                 (inst.id, now(), st['cpu'], st['mem_mb'], st['players'],
-                                 st['tps'], st['mspt']))
+                                 tps_v, mspt_v))
                     execute('DELETE FROM metrics WHERE ts < ?', (now() - 7 * 86400,))
-            except Exception:
-                pass
+            except Exception as e:
+                # ⚠️ 这里原来是裸 `pass`：采样一旦出错就**完全静默** —— 现象是
+                #    「监控曲线没有 TPS / 指标不再增长」，但日志里一个字都没有，
+                #    只能靠猜（实测为此排查了很久）。改成记日志，让失败可见。
+                logger.warning('监控采样失败：%s', e)
             time.sleep(1.0)
 
     # ------------------------------------------------------------ 销毁

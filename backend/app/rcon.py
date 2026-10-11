@@ -20,6 +20,13 @@ import time
 _COLOR = re.compile(r'\u00a7[0-9A-FK-ORa-fk-or]')
 _RE_TRIPLE = re.compile(
     r'TPS from last 1m, 5m, 15m:\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)', re.I)
+_RE_TPS_HEAD = re.compile(r'TPS\s*(?:\([^)]*\))?\s*(?:from last)?\s*:?\s*(.+)', re.I)
+#: 窗口标签（5s / 1m / 5m / 15m …）
+_RE_WIN_LABEL = re.compile(r'\b(\d+[smhd])\b', re.I)
+#: 数值（去掉末尾逗号，避免把分隔符吃进数字里）
+_RE_FLOAT = re.compile(r'([0-9]+(?:\.[0-9]+)?)\s*,?')
+#: 「窗口:数值」成对写法（另一种服务端变体）
+_RE_WIN_PAIR = re.compile(r'(\d+[smhd])\s*:\s*([0-9.]+)', re.I)
 _RE_TRIPLE2 = re.compile(
     r'TPS\s*(?:\(1m, ?5m, ?15m\)|from last)\s*:?\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)', re.I)
 _RE_FORGE = re.compile(
@@ -43,6 +50,49 @@ def strip_mc_colors(text: str) -> str:
     return _COLOR.sub('', text or '')
 
 
+def _parse_tps_windows(clean: str):
+    """解析 TPS 输出，返回 {1m,5m,15m} 或 None。
+
+    覆盖 Paper/Purpur 的多种写法（实测踩过坑：只兼容一种会一条都解析不出来）：
+        TPS from last 1m, 5m, 15m: 20.0, 19.5, 18.0          ← 旧版：窗口是「标签列表」
+        TPS from last 5s, 1m, 5m, 15m: 20.0, 20.0, 20.0, 20.0 ← 实测 Purpur 26.x
+        TPS (1m, 5m, 15m): 20.0, 20.0, 20.0
+        TPS: 5s: 20.0, 1m: 20.0, 5m: 20.0                     ← 成对写法
+
+    关键点：**窗口标签和数值是分开的两组**（`5s, 1m, 5m, 15m: 20.0, 20.0, …`），
+    所以不能按「窗口:数值」去配对；改为分别取出两组再按顺序对齐。
+    """
+    head = _RE_TPS_HEAD.search(clean)
+    if not head:
+        return None
+    body = head.group(1)
+
+    # ① 成对写法：窗口跟着自己的数值
+    pairs = _RE_WIN_PAIR.findall(body)
+    if len(pairs) >= 3:
+        by = {}
+        for win, val in pairs:
+            try:
+                by[win.lower()] = float(val)
+            except ValueError:
+                pass
+        if '1m' in by and '5m' in by and '15m' in by:
+            return {'1m': by['1m'], '5m': by['5m'], '15m': by['15m']}
+
+    # ② 分开写法：先取全部数值，再取窗口标签，按顺序对齐
+    vals = [float(x) for x in _RE_FLOAT.findall(body)]
+    if len(vals) < 3:
+        return None
+    wins = [w.lower() for w in _RE_WIN_LABEL.findall(body)]
+    # 标签数应与数值数相当（不算 section 符号等噪声）
+    if len(wins) == len(vals):
+        by = dict(zip(wins, vals))
+        if '1m' in by and '5m' in by and '15m' in by:
+            return {'1m': by['1m'], '5m': by['5m'], '15m': by['15m']}
+    # ③ 兜底：取最后三个数当作 1m/5m/15m（1m,5m,15m 与 5s,1m,5m,15m 的尾部都是这三个）
+    return {'1m': vals[-3], '5m': vals[-2], '15m': vals[-1]}
+
+
 def parse_tps_text(text: str) -> dict:
     """从命令/日志输出里解析 TPS 与 MSPT（解析不出来就返回空，不猜）。"""
     raw = (text or '')
@@ -55,6 +105,11 @@ def parse_tps_text(text: str) -> dict:
     if m:
         vals = [float(m.group(i)) for i in (1, 2, 3)]
         out['tps'] = {'1m': vals[0], '5m': vals[1], '15m': vals[2]}
+    if out['tps'] is None:
+        # 兜底：通用「窗口:数值」解析（覆盖 5s/1m/5m/15m 这类变体）
+        w = _parse_tps_windows(clean)
+        if w:
+            out['tps'] = w
     if out['tps'] is None:
         m = _RE_FORGE_OVERALL.search(clean)
         if m:
@@ -288,6 +343,42 @@ def tps_commands_for(core_type: str) -> list:
             seen.add(c)
             out.append(c)
     return out
+
+
+def tps_scalar(tps, window: str = '1m'):
+    """把 collect_tps 返回的 tps dict/值**归一成单个浮点数**，供写进 metrics 表用。
+
+    ⚠️ 为什么需要它：`metrics.tps` / `metrics.mspt` 是 **REAL 列**（存单个数字），
+    而 collect_tps 返回的是 `{'1m': 20.0, '5m': .., '15m': ..}` 这种 dict。
+    直接把 dict 塞给 sqlite3 会报
+        `Error binding parameter N - probably unsupported type`
+    于是**整条采样都写不进去**（实测：监控曲线长时间没有任何数据，
+    且原来的 `except: pass` 把这条报错完全吞了，只能靠猜）。
+    """
+    if tps is None:
+        return None
+    if isinstance(tps, (int, float)):
+        return float(tps)
+    if isinstance(tps, dict):
+        for k in (window, '1m', '5m', '15m'):
+            v = tps.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+    return None
+
+
+def mspt_scalar(mspt):
+    """把 mspt dict/值归一成单个浮点数（avg 优先）。理由同 tps_scalar。"""
+    if mspt is None:
+        return None
+    if isinstance(mspt, (int, float)):
+        return float(mspt)
+    if isinstance(mspt, dict):
+        for k in ('avg', 'mean', 'p95'):
+            v = mspt.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+    return None
 
 
 def collect_tps(row: dict, cfg: dict = None, log_lines=None, ttl: float = 5.0,
