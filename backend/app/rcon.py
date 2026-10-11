@@ -328,21 +328,20 @@ def _rcon_creds(row: dict, cfg: dict) -> tuple:
 def tps_commands_for(core_type: str) -> list:
     """按核心类型排好"最可能有数据"的命令顺序（RCON 下发不带前导 /）。
 
-    Paper/Spigot：tps + mspt；Forge/NeoForge：forge tps / neoforge tps；装了 spark：spark tps。
+    Paper/Spigot/Purpur：`tps` + `mspt`；Forge/NeoForge：`forge tps` / `neoforge tps`。
+
+    ⚠️ 为什么不再无脑把全部命令都试一遍（实测教训）：
+      · Purpur 上 `forge tps` / `neoforge tps` **必然不存在**，试它们只是白开一轮往返；
+      · 服务端对 RCON 命令有并发限制，试探不存在的命令会让它在控制台刷
+        `failed main thread check: Cannot perform command async`（实测 6 次），
+        既污染日志又没有产出；
+      · `spark tps` 从"每轮都试"改成"不试"：Purpur 虽内置 spark，
+        但 `tps`/`mspt` 已能给出数据，多试一条只会多一次被拒。
     """
     core = str(core_type or '').lower()
-    cmds = []
     if core in ('forge', 'neoforge'):
-        cmds += ['forge tps', 'neoforge tps']
-    cmds += ['tps', 'mspt', 'spark tps']
-    if core not in ('forge', 'neoforge'):
-        cmds += ['forge tps', 'neoforge tps']
-    seen, out = set(), []
-    for c in cmds:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
+        return [f'{core} tps']
+    return ['tps', 'mspt']
 
 
 def tps_scalar(tps, window: str = '1m'):
@@ -381,6 +380,23 @@ def mspt_scalar(mspt):
     return None
 
 
+#: 「单飞」锁：同一实例同一时刻只允许一次真实抓取。
+#: ⚠️ 为什么必须有它：`_tps_lock` 只保护缓存字典，**不保护抓取过程** ——
+#:    采样器（每 5 秒）与前端轮询的 `/status`（每 1 秒）会**同时穿透缓存**，
+#:    各自新开一条 RCON 连接。服务端每接一次连接就往控制台打两行
+#:    `Thread RCON Client ... started / shutting down`，日志被刷屏（用户实测反馈）。
+_flight_locks = {}
+_flight_guard = threading.Lock()
+
+
+def _flight_lock(iid):
+    with _flight_guard:
+        lk = _flight_locks.get(iid)
+        if lk is None:
+            lk = _flight_locks[iid] = threading.Lock()
+        return lk
+
+
 def collect_tps(row: dict, cfg: dict = None, log_lines=None, ttl: float = 5.0,
                 timeout: float = 5.0) -> dict:
     """采集某实例的 TPS/MSPT。
@@ -399,6 +415,16 @@ def collect_tps(row: dict, cfg: dict = None, log_lines=None, ttl: float = 5.0,
         if hit and time.time() - hit[0] < ttl:
             return dict(hit[1], cached=True)
 
+    # 单飞：同一实例同一时刻只抓一次；拿到锁后再查一次缓存（可能刚被别人取完）
+    with _flight_lock(iid):
+        with _tps_lock:
+            hit = _tps_cache.get(key)
+            if hit and time.time() - hit[0] < ttl:
+                return dict(hit[1], cached=True)
+        return _collect_tps_uncached(row, cfg, log_lines, ttl, timeout, key)
+
+
+def _collect_tps_uncached(row: dict, cfg, log_lines, ttl, timeout, key) -> dict:
     result = {'ok': True, 'available': False, 'tps': None, 'mspt': None, 'source': None,
               'mspt_source': None, 'note': '', 'raw': '', 'commands': [],
               'checked_at': time.time(), 'log_signals': None}

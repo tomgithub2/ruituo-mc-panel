@@ -118,7 +118,11 @@ def _decorate(row: dict) -> dict:
     if not st['tps_available'] and st['running']:
         try:
             from ..rcon import collect_tps, mspt_scalar, tps_scalar
-            t = collect_tps(row)
+            # TTL 给 30 秒：仪表盘 1 秒轮询一次 /status，而 TPS 是**慢变量** —— 
+            # 用默认的 5 秒会让前端把缓存直接踩穿，每次轮询都新开一条 RCON 连接，
+            # 服务端控制台就被 `Thread RCON Client ... started / shutting down` 刷屏。
+            # 采样器那边仍用短 TTL（它要写进指标表，需要新鲜值）。
+            t = collect_tps(row, ttl=30.0)
             if t.get('available'):
                 # 契约是数字（前端 Number(it.tps)），必须归一成标量，否则显示 NaN
                 out['tps'] = tps_scalar(t.get('tps'))

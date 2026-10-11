@@ -482,6 +482,7 @@ class Manager:
 
     # ------------------------------------------------------------ 停止
     def stop(self, inst_id: int, by: str = 'panel', timeout: int = 30, ip: str = '') -> dict:
+        _diag_who('manager.stop 被调用', by, ip, inst_id)
         inst = self.get(inst_id)
         row = inst.db()
         proc = inst.proc
@@ -498,6 +499,7 @@ class Manager:
             inst.status = ST_STOPPING
             execute('UPDATE instances SET status=? WHERE id=?', (ST_STOPPING, inst.id))
         try:
+            _diag_who('向服务端 stdin 发送 stop', by, ip, inst_id)
             self.send_command(inst_id, 'stop')
             inst.push('[面板] 已发送 stop 命令，等待优雅退出…', 'panel')
         except Exception as e:
@@ -511,6 +513,7 @@ class Manager:
             return {'ok': True, 'graceful': False}
 
     def _stop_external(self, inst: Instance, pid: int, by: str, timeout: int, ip: str = '') -> dict:
+        _diag_who('_stop_external（将走 RCON 发 stop）', by, ip, inst.id)
         """面板重启后接管的外部进程：无 stdin，只能尝试 RCON stop 再 kill。"""
         row = inst.db()
         cfg = get_config()
@@ -518,6 +521,7 @@ class Manager:
         pwd = row.get('rcon_password') or cfg.get('rcon_password') or ''
         if int(row.get('rcon_enabled') or 0) and pwd:
             from .rcon import try_command
+            _diag_who('通过 RCON 发送 stop', by, ip, inst.id)
             ok, _ = try_command('127.0.0.1', port, pwd, 'stop')
             if ok:
                 inst.push('[面板] 已通过 RCON 发送 stop，等待优雅退出…', 'panel')
@@ -548,6 +552,7 @@ class Manager:
             pass
 
     def kill(self, inst_id: int, by: str = 'panel', ip: str = '') -> dict:
+        _diag_who('manager.kill 被调用', by, ip, inst_id)
         inst = self.get(inst_id)
         proc = inst.proc
         inst.stop_requested = True
@@ -736,6 +741,22 @@ class Manager:
             inst = self.instances.pop(int(inst_id), None)
         if inst and inst.proc and inst.proc.poll() is None:
             self.kill(inst_id)
+
+
+def _diag_who(what: str, by: str, ip: str, iid) -> None:
+    """诊断：把「谁在停实例」写进日志 —— 调用者、参数、精简调用栈。
+
+    ⚠️ 为什么需要它：实测出现过「实例启动约 35 秒后自己停止，面板没有对应审计、
+    没有面板关闭日志、没有 cron、没有崩溃报告」，但服务端日志显示停止确实是
+    `DedicatedServer.runCommand` ← `RconClient.run`（通过 RCON 下发的 stop）。
+    仅靠现有日志无法定位是哪一处发的。这个函数把决定性证据落到日志里。
+    """
+    import traceback as _tb
+    chain = []
+    for fr in _tb.extract_stack()[-9:-1]:
+        chain.append('%s:%d(%s)' % (os.path.basename(fr.filename), fr.lineno, fr.name))
+    logger.warning('[诊断] %s | by=%r ip=%r iid=%r | 调用链: %s',
+                   what, by, ip, iid, ' <- '.join(reversed(chain)))
 
 
 manager = Manager()
