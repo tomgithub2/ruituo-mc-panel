@@ -557,6 +557,24 @@ Pages.settings = function (app) {
   TABS.advanced = function () {
     document.getElementById('set-body').innerHTML = '' +
       '<div class="grid cols-2">' +
+        /* 远程推送更新：检查 → 验签 → 下载 → 备份 → 应用。全流程在面板侧独立校验，
+           官网只提供清单；未绑定时也能收到「全局推送」，绑定后才有定向推送。 */
+        '<div class="card" style="grid-column:1/-1"><div class="card-head"><h3>面板更新</h3>' +
+          '<div class="right">' +
+            '<span class="badge mono" id="u-ver">当前版本</span>' +
+            '<button class="btn sm" id="u-check">' + Icon.svg('refresh', 14) + '检查更新</button>' +
+          '</div></div>' +
+          '<div id="u-body" class="small muted">点「检查更新」向官网查询新版本（会做签名校验，篡改的包会被拒绝）。</div>' +
+          '<div class="row mt" id="u-acts" style="display:none">' +
+            '<button class="btn sm primary" id="u-apply">下载并更新</button>' +
+            '<button class="btn sm" id="u-restart">重启面板</button>' +
+          '</div>' +
+          '<div class="tip small mt">更新只替换代码，<b>不会碰数据目录</b>（实例 / 世界 / 备份 / 配置都安全）。'
+            + '更新后需重启面板生效。</div>' +
+          '<div class="row mt"><div class="small muted" id="u-bind-info">绑定状态加载中…</div>' +
+            '<button class="btn sm" id="u-bind">绑定官网账号</button>' +
+            '<button class="btn sm" id="u-unbind" style="display:none">解除绑定</button></div>' +
+        '</div>' +
         '<div class="card"><div class="card-head"><h3>磁盘与缓存</h3>' +
           '<div class="right"><button class="btn sm" id="a-refresh">' + Icon.svg('refresh', 14) + '刷新</button></div></div>' +
           '<div id="a-usage"><div class="loading"><span class="spinner"></span>统计中…</div></div>' +
@@ -575,6 +593,7 @@ Pages.settings = function (app) {
       '</div>';
     statUsage();
     loadLog();
+    bindUpdateCard();
     document.getElementById('a-refresh').addEventListener('click', statUsage);
     document.getElementById('a-log-refresh').addEventListener('click', loadLog);
     document.getElementById('a-log-dl').addEventListener('click', function () {
@@ -596,6 +615,155 @@ Pages.settings = function (app) {
     act('a-clean-metrics', '/api/maintenance/clean-metrics', '删除 7 天前的监控采样数据（曲线历史会变短）。');
     act('a-clean-logs', '/api/maintenance/clean-logs', '清除所有实例的历史日志文件（保留 latest.log）。');
   };
+
+  /* 远程推送更新的界面逻辑：
+     检查更新（面板侧会做 RSA 验签与产品归属校验）→ 展示变更说明 → 应用 → 提示重启。
+     绑定官网账号后可收到「定向推送」（官网后台把某个版本推给这台机器）。 */
+  function bindUpdateCard() {
+    var body = document.getElementById('u-body');
+    var acts = document.getElementById('u-acts');
+    var verEl = document.getElementById('u-ver');
+    var bindInfo = document.getElementById('u-bind-info');
+    if (!body) return;
+    var lastInfo = null;
+
+    function renderBind(st) {
+      if (!bindInfo) return;
+      if (st && st.bound) {
+        bindInfo.textContent = '已绑定官网账号 ' + (st.account || '') + '（机器号 ' + (st.machine_id || '') + '）';
+        document.getElementById('u-bind').style.display = 'none';
+        document.getElementById('u-unbind').style.display = '';
+      } else {
+        bindInfo.textContent = '未绑定官网账号（机器号 ' + ((st && st.machine_id) || '—')
+          + '）：仍可收到全局更新，绑定后才能收到定向推送';
+        document.getElementById('u-bind').style.display = '';
+        document.getElementById('u-unbind').style.display = 'none';
+      }
+      if (verEl && st && st.server) verEl.textContent = '更新源 ' + st.server.replace(/^https?:\/\//, '');
+    }
+
+    function loadBinding() {
+      API.get('/api/update/binding').then(function (st) { renderBind(st); })
+        .catch(function () { if (bindInfo) bindInfo.textContent = '绑定状态读取失败（需超级管理员）'; });
+    }
+
+    function showStatus() {
+      API.get('/api/update/status').then(function (d) {
+        if (verEl) verEl.textContent = '当前版本 ' + (d.current_version || '');
+        if (d.busy) {
+          body.innerHTML = '<div class="loading"><span class="spinner"></span>更新进行中…</div>'
+            + '<pre class="mono small" style="max-height:180px;overflow:auto">'
+            + U.esc((d.log || []).join('\n')) + '</pre>';
+          setTimeout(showStatus, 2000);
+          return;
+        }
+        if (d.last_result) {
+          var r = d.last_result;
+          body.innerHTML = (r.ok
+            ? '<div class="tip ok">更新完成：'
+              + U.esc(String(r.version || '')) + '（覆盖 ' + r.replaced + ' / 新增 ' + r.created + '）'
+              + '，请重启面板生效。</div>'
+            : '<div class="tip err">更新失败：' + U.esc(r.error || '未知原因') + '</div>')
+            + (r.backup_dir ? '<div class="small muted mt">备份：<span class="mono">' + U.esc(r.backup_dir) + '</span></div>' : '');
+        }
+      }).catch(function () {});
+    }
+
+    document.getElementById('u-check').addEventListener('click', function () {
+      body.innerHTML = '<div class="loading"><span class="spinner"></span>正在向官网查询…</div>';
+      API.get('/api/update/check').then(function (d) {
+        if (verEl && d.current_version) verEl.textContent = '当前版本 ' + d.current_version;
+        if (!d.ok) {
+          body.innerHTML = '<div class="tip err">' + U.esc(d.error || '检查失败') + '</div>';
+          acts.style.display = 'none';
+          return;
+        }
+        if (!d.has_update) {
+          body.innerHTML = '<div class="tip ok">已是最新版本（' + U.esc(String(d.current_version || '')) + '）</div>'
+            + (d.note ? '<div class="small muted mt">' + U.esc(d.note) + '</div>' : '');
+          acts.style.display = 'none';
+          return;
+        }
+        lastInfo = d;
+        body.innerHTML = '<div class="tip ok">发现新版本 <b>' + U.esc(String(d.version || ''))
+          + '</b>（当前 ' + U.esc(String(d.current_version || '')) + '，共 '
+          + (d.file_count || 0) + ' 个文件）</div>'
+          + '<div class="small mt" style="white-space:pre-wrap">' + U.esc(d.notes || '（无变更说明）') + '</div>'
+          + '<div class="small muted mt">来源：' + U.esc(String(d.push_mode || 'global'))
+          + (d.push_mode === 'machine' ? '（定向推送）' : '（全局）') + '</div>';
+        acts.style.display = '';
+      }).catch(function (e) {
+        body.innerHTML = '<div class="tip err">' + U.esc(e.message) + '</div>';
+        acts.style.display = 'none';
+      });
+    });
+
+    document.getElementById('u-apply').addEventListener('click', function () {
+      C.Modal.confirm('确认更新', '将从官网下载更新包，校验签名与逐文件哈希后覆盖面板代码'
+        + '（会先整份备份，失败自动回滚；不会碰数据目录）。继续？', function () {
+        return API.post('/api/update/apply', {}).then(function (r) {
+          Toast.ok('已开始更新到 ' + (r.version || ''));
+          showStatus();
+        });
+      }, true);
+    });
+
+    document.getElementById('u-restart').addEventListener('click', function () {
+      C.Modal.confirm('重启面板', '面板会在 1 秒后重启。若用 systemd / panelctl 部署会自动拉起，'
+        + '否则请手动执行 panelctl start。正在运行的 MC 实例不受影响。继续？', function () {
+        return API.post('/api/update/restart', {}).then(function () {
+          Toast.ok('面板正在重启，请稍后刷新页面');
+        });
+      }, true);
+    });
+
+    document.getElementById('u-bind').addEventListener('click', function () {
+      C.Modal.open({
+        title: '绑定官网账号',
+        footer: false,
+        body: '<div class="tip mb">绑定后可收到「定向推送」（官网后台可把某个版本只推给这台机器）。'
+          + '全局更新不绑定也能收到。凭据只保存在本机数据目录（0600 权限）。</div>'
+          + '<div class="field"><label>官网账号（邮箱或用户名）</label>'
+          + '<input type="text" id="ub-acc" autocomplete="off" /></div>'
+          + '<div class="field"><label>官网密码</label>'
+          + '<input type="password" id="ub-pw" autocomplete="off" /></div>'
+          + '<div class="row" style="justify-content:flex-end">'
+          + '<button class="btn" id="ub-cancel">取消</button>'
+          + '<button class="btn primary" id="ub-ok">绑定</button></div>',
+        onMount: function (mask) {
+          mask.querySelector('#ub-cancel').addEventListener('click', function () { C.Modal.close(); });
+          var doBind = function () {
+            var v = {
+              account: (mask.querySelector('#ub-acc').value || '').trim(),
+              password: mask.querySelector('#ub-pw').value || ''
+            };
+            if (!v.account || !v.password) { Toast.warn('请填写账号与密码'); return; }
+            API.post('/api/update/bind', v).then(function (st) {
+              Toast.ok('绑定成功');
+              C.Modal.close();
+              renderBind(st);
+            }).catch(function (e) { Toast.err(e.message); });
+          };
+          mask.querySelector('#ub-ok').addEventListener('click', doBind);
+          mask.querySelector('#ub-pw').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') doBind();
+          });
+        }
+      });
+    });
+
+    document.getElementById('u-unbind').addEventListener('click', function () {
+      C.Modal.confirm('解除绑定', '仅清除本机保存的绑定信息（不影响官网账号与其它机器）。', function () {
+        return API.post('/api/update/unbind', { local_only: true }).then(function (st) {
+          Toast.ok('已解除绑定');
+          renderBind(st);
+        });
+      });
+    });
+
+    loadBinding();
+    showStatus();
+  }
 
   function statUsage() {
     API.get('/api/maintenance/usage').then(function (d) {
