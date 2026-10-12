@@ -509,6 +509,45 @@ def _s(strings: list, idx: int) -> str:
 #   · 出问题时能明确区分"格式读错了"还是"方块映射错了"
 
 #: 基岩版数字 data 值（legacy meta）→ 面板 mapping 用的 (id, meta)
+#: 基岩版命令块 mode → Java 版**方块类型**。
+#:
+#: ⚠️ 这是 Java 与基岩的一个关键差异，我一开始漏了它（实测发现）：
+#:   · **基岩**：三种命令块是**同一个方块**（`minecraft:command_block`），靠 `mode` 字段区分；
+#:   · **Java** ：三种是**三个不同方块** ——
+#:       mode 0 脉冲 impulse   → `minecraft:command_block`
+#:       mode 1 循环 repeat    → `minecraft:repeating_command_block`
+#:       mode 2 连锁 chain     → `minecraft:chain_command_block`
+#:   只转命令文本、却把三种都落成 `command_block` 的话，
+#:   导入后**循环/连锁命令块会全部变成脉冲块**（行为完全变了）。
+_CMD_BLOCK_BY_MODE = {
+    0: 'minecraft:command_block',
+    1: 'minecraft:repeating_command_block',
+    2: 'minecraft:chain_command_block',
+}
+
+
+def _cmd_block_for_mode(mode, fallback: str = 'minecraft:command_block') -> str:
+    """由基岩 mode 推出 Java 版命令块的方块名（认不出就返回 fallback）。"""
+    try:
+        return _CMD_BLOCK_BY_MODE.get(int(mode), fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _cmd_block_entity_id(state: str) -> str:
+    """由方块名推出正确的方块实体 `id`（Java 下 id 必须与方块一致）。
+
+    三者都是命令块家族，但 id 各不相同；写错会让方块实体失效
+    （命令块看起来在、但里面没有命令）。
+    """
+    st = (state or '').lower()
+    if 'repeating_command_block' in st:
+        return 'minecraft:repeating_command_block'
+    if 'chain_command_block' in st:
+        return 'minecraft:chain_command_block'
+    return 'minecraft:command_block'
+
+
 _CMD_BLOCK_MODES = {0: 'impulse', 1: 'repeat', 2: 'chain'}
 
 
@@ -558,14 +597,60 @@ def _bedrock_block_to_java(name: str, block_data: int = 0, states: str = ''):
     return base, note
 
 
-def _command_block_entity(cb: dict, java_cmd: str, notes: list):
-    """构造命令块的方块实体 NBT（照 formats.py 里既有的方块实体写法）。"""
+def _cmd_block_state(mode, conditional=None, facing=None) -> str:
+    """构造 Java 版命令块的**完整方块状态**。
+
+    ⚠️ Java 版命令块有两个必须用**方块状态**表达、而不是 NBT 的东西：
+      · `conditional` —— 「有条件」开关。Java 里它是方块状态
+        （`conditional=true/false`）；基岩的 `conditional` 字段是 0/1。
+        我原来把它塞进 NBT 的 `conditionMet`（那是**运行时**"上次条件是否满足"，
+        根本不是配置项），等于**条件开关丢了**。
+      · `facing` —— 朝向（下/上/北/南/西/东，默认 up）。
+    这两个不设的话，导入的命令块在游戏里表现会和原建筑不一致。
+    """
+    props = []
+    # ⚠️ `conditional=false` 是 Java 的**默认值**，不必写进状态：
+    #    · 写 `conditional=false` 虽然也合法，但会让调色板多出无意义的条目；
+    #    · 真正的默认（不写）更贴近原版结构文件。
+    #    所以只在"有条件"时显式写 `conditional=true`。
+    if conditional:
+        props.append('conditional=true')
+    if facing:
+        props.append('facing=%s' % str(facing))
+    base = _cmd_block_for_mode(mode)
+    if not props:
+        return base
+    return '%s[%s]' % (base, ','.join(props))
+
+
+def _cmd_block_facing(dir_value) -> str:
+    """基岩的 `direction` 字段（0-5）→ Java 的 facing 值。
+
+    基岩方块数据值惯例：0=下 1=上 2=北 3=南 4=西 5=东
+    （命令块默认朝上 = 1）
+    """
+    table = {0: 'down', 1: 'up', 2: 'north', 3: 'south', 4: 'west', 5: 'east'}
+    try:
+        return table.get(int(dir_value), 'up')
+    except (TypeError, ValueError):
+        return 'up'
+
+
+def _command_block_entity(cb: dict, java_cmd: str, notes: list,
+                          state: str = 'minecraft:command_block'):
+    """构造命令块的方块实体 NBT（照 formats.py 里既有的方块实体写法）。
+
+    `state` 决定 `id` —— Java 版三种命令块的实体 id 各不相同，
+    必须与方块本身一致，否则方块实体失效（方块在、但里面没有命令）。
+    """
     from .nbt import Tag
     d = {
-        'id': Tag.string('minecraft:command_block'),
+        # ⚠️ 不能写死 'minecraft:command_block'：循环/连锁命令块有各自的 id
+        'id': Tag.string(_cmd_block_entity_id(state)),
         'Command': Tag.string(java_cmd or ''),
         'auto': Tag.byte(1 if cb.get('executeOnFirstTick', True) else 0),
-        'conditionMet': Tag.byte(1 if cb.get('conditional') else 0),
+        # ⚠️ `conditionMet` 是**运行时**字段（上次条件是否满足），不是"有条件"开关；
+        #    「有条件」走方块状态 `conditional=…`（见 _cmd_block_state）。
         'powered': Tag.byte(0 if cb.get('needsRedstone', True) else 1),
         'TrackOutput': Tag.byte(1 if cb.get('trackOutput', True) else 0),
         'UpdateLastExecution': Tag.byte(1),
@@ -665,9 +750,12 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
             continue
 
         if nm in ('PlaceCommandBlockWithCommandBlockData',):
+            # ⚠️ 方块类型必须由 **mode** 决定：基岩用同一个方块 + mode 区分脉冲/循环/连锁，
+            #    而 Java 是**三个不同方块**。原来写死 command_block，
+            #    导致循环/连锁命令块导入后全变成脉冲块（行为完全变了）。实测发现。
             blocks.append(_mk_cmd_block(d, x, y, z, _convert, warnings,
                                         converted_cmds, kept_cmds,
-                                        state='minecraft:command_block'))
+                                        state=_cmd_block_for_mode(d.get('mode'))))
             continue
 
         if nm == 'PlaceBlockWithCommandBlockData':
@@ -675,6 +763,9 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
                                                  d.get('blockData') or 0)
             if note:
                 warnings.append(note)
+            # BDX 里若给的方块名是泛指的命令块，仍按 mode 细分到 Java 的对应方块
+            if 'command_block' in (state or '') and 'repeating' not in state and 'chain' not in state:
+                state = _cmd_block_for_mode(d.get('mode'), fallback=state)
             blocks.append(_mk_cmd_block(d, x, y, z, _convert, warnings,
                                         converted_cmds, kept_cmds, state=state))
             continue
@@ -740,8 +831,17 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
 
 
 def _mk_cmd_block(d: dict, x: int, y: int, z: int, convert, warnings,
-                  converted_cmds: list, kept_cmds: list, state: str):
-    """造一个命令块。`convert` 是**方向感知**的转换闭包（由 to_schematic 注入）。"""
+                  converted_cmds: list, kept_cmds: list, state: str = ''):
+    """造一个命令块。`convert` 是**方向感知**的转换闭包（由 to_schematic 注入）。
+
+    ⚠️ **方块状态必须与命令块的属性对应**，不能只转命令文本：
+      · 脉冲/循环/连锁 → Java 是**三个不同方块**（由 mode 决定）；
+      · `conditional`（有条件）→ Java 用**方块状态** `conditional=true`，
+        基岩是 0/1 字段。原来我把它塞进 NBT 的 `conditionMet`
+        （那是运行时字段），等于**条件开关丢了**；
+      · `facing`（朝向）→ 基岩在 `data` 低 3 位（0=下…5=东），Java 是 `facing=` 状态。
+    这三项不处理，导入后的命令块在游戏里表现会和原建筑不一致。
+    """
     raw = d.get('command') or ''
     java, notes = convert(raw)
     notes = list(notes or [])
@@ -751,8 +851,33 @@ def _mk_cmd_block(d: dict, x: int, y: int, z: int, convert, warnings,
         converted_cmds.append({'from': raw, 'to': java, 'notes': notes})
     else:
         kept_cmds.append({'cmd': raw, 'notes': notes})
-    be = _command_block_entity(d, java, notes)
-    return {'x': x, 'y': y, 'z': z, 'state': state, 'nbt': be}
+
+    # ---- 方块类型：优先用显式传入的，否则由 mode 推
+    if not state:
+        state = _cmd_block_for_mode(d.get('mode'))
+    elif 'command_block' in state and 'repeating' not in state and 'chain' not in state:
+        state = _cmd_block_for_mode(d.get('mode'), fallback=state)
+
+    # ---- 条件 + 朝向 → 方块状态
+    cond = bool(d.get('conditional'))
+    # 基岩的朝向在 data / blockData 的低 3 位。
+    # ⚠️ **只在数据位明确非 0 时才设 facing**：command block 的 `data=0` 很可能是
+    #    "未指定/默认"，而命令块的默认朝向是**上**；若把 0 解读成 `facing=down`
+    #    就会把方块**放歪**（0→down 只是"朝向编码表"里的位置，不代表这里确实要 down）。
+    #    宁可少设一个状态（游戏用默认值），也不要把朝向设错。
+    dir_raw = d.get('data', d.get('blockData'))
+    facing = None
+    if dir_raw is not None:
+        try:
+            dv = int(dir_raw)
+            if (dv & 0x07) != 0:
+                facing = _cmd_block_facing(dv & 0x07)
+        except (TypeError, ValueError):
+            facing = None
+    final_state = _cmd_block_state(d.get('mode'), conditional=cond, facing=facing)
+
+    be = _command_block_entity(d, java, notes, state=final_state)
+    return {'x': x, 'y': y, 'z': z, 'state': final_state, 'nbt': be}
 
 
 def _apply_set_cmd(blocks: list, x: int, y: int, z: int, d: dict, convert, warnings,
@@ -762,7 +887,9 @@ def _apply_set_cmd(blocks: list, x: int, y: int, z: int, d: dict, convert, warni
         if 'command_block' in (b.get('state') or ''):
             raw = d.get('command') or ''
             java, notes = convert(raw)
-            b['nbt'] = _command_block_entity(d, java, list(notes or []))
+            # 沿用该方块自身的 state（脉冲/循环/连锁），实体 id 要与之一致
+            b['nbt'] = _command_block_entity(d, java, list(notes or []),
+                                             state=b.get('state') or 'minecraft:command_block')
             if raw.strip():
                 if java != raw:
                     converted_cmds.append({'from': raw, 'to': java, 'notes': list(notes or [])})

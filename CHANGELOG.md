@@ -3,6 +3,31 @@
 本文件记录芮拓MC开服面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.4] - 2026-10-12
+
+### 修复
+- **命令块的方块类型没有按 mode 对应**（用户反馈：「命令语法还要调整成对应的」）。
+  这是 Java 与基岩的一个关键差异，我此前漏掉了：
+  - **基岩**：脉冲 / 循环 / 连锁是**同一个方块**（`minecraft:command_block`），靠 `mode` 字段区分；
+  - **Java** ：三者是**三个不同方块** —— `command_block` / `repeating_command_block` /
+    `chain_command_block`。
+
+  原来的实现把三种都落成 `minecraft:command_block`，**导入后循环/连锁命令块全部变成脉冲块**
+  （行为完全变了），方块实体 `id` 也写死了 `minecraft:command_block`（实体失效风险）。
+  现在按 mode 正确映射**方块名 + 实体 id**。
+
+- **「有条件」开关会丢失**：Java 里 `conditional` 是**方块状态**（`conditional=true`），
+  基岩是 0/1 字段。我原来把它写进了 NBT 的 `conditionMet` ——
+  那是**运行时**"上次条件是否满足"，不是配置项，等于开关丢了。现在写进方块状态。
+
+- 朝向（`facing`）：基岩的朝向在 `data` 低 3 位。**只在数据位明确非 0 时**才设
+  （`data=0` 视为"未指定"，用游戏默认的朝上）—— 宁可少设一个状态，
+  也不要把方块放歪。
+
+### 实测
+- 三种 mode × 有条件/无条件 = **6/6 方块状态与实体 id 全部对应正确**
+- 回归：转换器自测 15/15 · 命令转换三方向 9/9 · RCON 静默期间 0 次连接
+
 ## [0.3.3] - 2026-10-12
 
 ### 变更
