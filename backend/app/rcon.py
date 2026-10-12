@@ -10,6 +10,7 @@ TPS/MSPT（P0-3）
   · 退化：解析服务端日志（`TPS from last 1m, 5m, 15m:`、`Can't keep up!`、`Done (x.xxxs)!`）；
   · **拿不到就是 null**：绝不回 0、不猜数；`available=false` + 中文 `note` 说明原因。
 """
+import os
 import re
 import socket
 import struct
@@ -426,12 +427,6 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
         inst = manager.get(iid)
         proc = getattr(inst, 'proc', None)
         if proc is not None and proc.poll() is None and getattr(proc, 'stdin', None):
-            # 先记住发送前的控制台行数，避免把**旧**的 TPS 回显当成新结果
-            before = 0
-            try:
-                before = len(inst.ring)
-            except Exception:
-                pass
             # 服务端核心不同，TPS 命令也不同（沿用 collect_tps 里的同一张表）
             cmds = tps_commands_for((row or {}).get('core_type'))
             for c in cmds:
@@ -445,17 +440,57 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                                               'via': 'stdin',
                                               'error': (r.get('error') or '')[:200]})
             if sent:
-                time.sleep(max(0.2, float(wait)))
-                # 只取"发送之后新增"的日志行去做解析
-                fresh = None
+                # ⚠️ 取回显有两条路，**优先读日志文件**：
+                #   `_pump` 从子进程 stdout 读到的每一行都会**同时**写进
+                #   `<实例目录>/logs/latest.log`（`lf.write(line)`），
+                #   所以直接读这个文件的新增内容最可靠 ——
+                #   不依赖内存里的 `ring`（ring 是环形缓冲、内容受推送时机影响，
+                #   实测它常常取不到命令回显）。
+                #   若日志文件读不到，再回退内存 ring。
+                fresh = []
+                size0 = 0
+                logpath = ''
                 try:
-                    tail = inst.tail(400)
-                    if before and len(inst.ring) >= before:
-                        fresh = tail[-(len(inst.ring) - before + 8):]
-                    else:
-                        fresh = tail
+                    wd = getattr(inst, 'workdir', '') or ''
+                    if wd:
+                        logpath = os.path.join(wd, 'logs', 'latest.log')
+                        if os.path.isfile(logpath):
+                            size0 = os.path.getsize(logpath)
                 except Exception:
-                    fresh = None
+                    logpath, size0 = '', 0
+
+                # 轮询最多 ~2.4 秒，等到出现 TPS 行就立刻返回（通常 <1 秒）
+                deadline = time.time() + 2.4
+                while True:
+                    time.sleep(0.25)
+                    if logpath and os.path.isfile(logpath):
+                        try:
+                            cur = os.path.getsize(logpath)
+                            if cur > size0:
+                                with open(logpath, 'rb') as f:
+                                    f.seek(size0)
+                                    chunk = f.read(cur - size0)
+                                text = chunk.decode('utf-8', 'replace')
+                                fresh = [x for x in text.split('\n') if x.strip()]
+                        except Exception:
+                            fresh = []
+                    if fresh:
+                        p = parse_log_tps(fresh)
+                        if p.get('tps'):
+                            break
+                    if time.time() >= deadline:
+                        break
+
+                # 日志文件没取到 → 回退内存 ring
+                if not fresh:
+                    try:
+                        tail = inst.tail(400)
+                        fresh = [(x.get('line', '') if isinstance(x, dict) else str(x))
+                                 for x in tail[-40:]]
+                    except Exception as e:
+                        result['note'] = 'stdin 读取回显失败：%s' % e
+                        fresh = []
+
                 if fresh:
                     p = parse_log_tps(fresh)
                     result['log_signals'] = p.get('log_signals')
@@ -468,6 +503,20 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                     if p.get('mspt') and not result['mspt']:
                         result['mspt'] = p['mspt']
                         result['mspt_source'] = 'stdin'
+                    if not result['available']:
+                        # 解析失败时把线索留在返回值里（不静默），方便定位
+                        result['stdin_debug'] = {
+                            'log_file': logpath,
+                            'size_before': size0,
+                            'fresh_lines': len(fresh),
+                            'sample': [str(x)[:120] for x in fresh[-6:]],
+                        }
+                else:
+                    result['stdin_debug'] = {
+                        'log_file': logpath, 'size_before': size0,
+                        'fresh_lines': 0, 'sample': [],
+                        'hint': '命令已发送，但日志文件与内存缓冲都没读到回显',
+                    }
     except Exception as e:
         result['note'] = 'stdin 路径异常：%s' % e
 
