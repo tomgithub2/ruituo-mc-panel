@@ -125,18 +125,24 @@ def _instance_log_lines(row: dict, limit: int = 1500) -> list:
 @router.get('/instances/{iid}/tps')
 def instance_tps(iid: int, refresh: int = Query(default=0),
                  user: dict = Depends(get_current_user)):
-    """TPS / MSPT：优先 RCON（forge/neoforge/spark/tps），退化到日志解析。
+    """TPS / MSPT —— **按需获取**（用户要求：不再轮询，只在点「刷新」时取一次）。
+
+    取数顺序：
+      1. **stdin**：面板自己启动的实例保留了子进程 stdin，写一条 `tps` 命令再读控制台回显
+         —— **完全不碰 RCON**；
+      2. 日志解析：如果控制台里已经有 TPS 行；
+      3. **RCON 兜底**：仅"面板重启后接管的外部实例"（没有 stdin）才走这条
+         （用户选择保留 RCON 作兜底，但它**不会**被任何定时器触发）。
 
     结构：`{ok, available, tps:{1m,5m,15m}|null, mspt:{avg,p95}|null,
-            source:'rcon:forge'|'rcon:spark'|'rcon:tps'|'log'|null, note}`
+            source:'stdin'|'log'|'rcon:…'|null, note}`
     **拿不到就是 null，绝不回 0。**
     """
     row = _inst_row(iid, user)
     if refresh:
         rcon_mod.clear_tps_cache(iid)
-    # TTL 25 秒：这个接口是前端手点/定时刷新用的，5 秒缓存会让频繁刷新
-    # 直接踩穿缓存、每次新开一条 RCON 连接（服务端控制台刷屏）。
-    out = rcon_mod.collect_tps(row, log_lines=_instance_log_lines(row), ttl=300.0)
+    out = rcon_mod.collect_tps_on_demand(
+        iid, row, log_lines_fn=lambda: _instance_log_lines(row))
     st = manager.status(iid)
     out['instance'] = row.get('name')
     out['instance_id'] = iid

@@ -400,6 +400,119 @@ def _flight_lock(iid):
         return lk
 
 
+def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
+                          wait: float = 1.2) -> dict:
+    """**按需**取一次 TPS：优先走 stdin（不碰 RCON），取不到才回退 RCON。
+
+    这是用户明确要求的方式：「TPS 不再轮询，只在我点『刷新』时取一次」。
+    为什么要分两条路：
+      · 面板**自己启动**的实例 → 保留了子进程 stdin（`Popen(stdin=PIPE)`），
+        直接写一条 `tps` 命令、再读控制台回显即可 —— **完全不碰 RCON**；
+      · 面板重启后**接管的外部实例** → 没有 stdin 通道，只能回退 RCON
+        （用户选择「保留 RCON 作为兜底」）。
+    两者都失败时 `available=False`，**绝不编造数值**。
+    """
+    result = {'ok': True, 'available': False, 'tps': None, 'mspt': None,
+              'source': None, 'note': '', 'raw': '', 'commands': [],
+              'checked_at': time.time(), 'log_signals': None}
+    if not iid:
+        result['note'] = '缺少实例 id'
+        return result
+
+    # ---- 路线 1：stdin（面板启动的实例）
+    sent = False
+    try:
+        from .process_manager import manager
+        inst = manager.get(iid)
+        proc = getattr(inst, 'proc', None)
+        if proc is not None and proc.poll() is None and getattr(proc, 'stdin', None):
+            # 先记住发送前的控制台行数，避免把**旧**的 TPS 回显当成新结果
+            before = 0
+            try:
+                before = len(inst.ring)
+            except Exception:
+                pass
+            # 服务端核心不同，TPS 命令也不同（沿用 collect_tps 里的同一张表）
+            cmds = tps_commands_for((row or {}).get('core_type'))
+            for c in cmds:
+                r = manager.send_command(iid, c)
+                if r.get('ok'):
+                    sent = True
+                    result['commands'].append({'cmd': c, 'ok': True,
+                                              'via': 'stdin'})
+                else:
+                    result['commands'].append({'cmd': c, 'ok': False,
+                                              'via': 'stdin',
+                                              'error': (r.get('error') or '')[:200]})
+            if sent:
+                time.sleep(max(0.2, float(wait)))
+                # 只取"发送之后新增"的日志行去做解析
+                fresh = None
+                try:
+                    tail = inst.tail(400)
+                    if before and len(inst.ring) >= before:
+                        fresh = tail[-(len(inst.ring) - before + 8):]
+                    else:
+                        fresh = tail
+                except Exception:
+                    fresh = None
+                if fresh:
+                    p = parse_log_tps(fresh)
+                    result['log_signals'] = p.get('log_signals')
+                    if p.get('tps'):
+                        result['tps'] = p['tps']
+                        result['available'] = True
+                        result['source'] = 'stdin'
+                        result['raw'] = p.get('raw', '')
+                        result['tps_note'] = p.get('note') or ''
+                    if p.get('mspt') and not result['mspt']:
+                        result['mspt'] = p['mspt']
+                        result['mspt_source'] = 'stdin'
+    except Exception as e:
+        result['note'] = 'stdin 路径异常：%s' % e
+
+    if result['available']:
+        return result
+
+    # 若还给了 log_lines_fn，也用它再试一次（可能面板已从日志里拿到了）
+    if log_lines_fn:
+        try:
+            lines = log_lines_fn()
+            if lines:
+                p = parse_log_tps(lines)
+                if p.get('tps'):
+                    result['tps'] = p['tps']
+                    result['available'] = True
+                    result['source'] = 'log'
+                    result['raw'] = p.get('raw', '')
+                    if p.get('mspt') and not result['mspt']:
+                        result['mspt'] = p['mspt']
+        except Exception:
+            pass
+    if result['available']:
+        return result
+
+    # ---- 路线 2：回退 RCON（仅"接管的外部实例"需要；用户选择保留作兜底）
+    r = collect_tps(row or {}, cfg=cfg, log_lines=log_lines_fn() if log_lines_fn else None,
+                    ttl=0.0)
+    if r.get('available'):
+        result['tps'] = r.get('tps')
+        result['mspt'] = r.get('mspt') or result['mspt']
+        result['available'] = True
+        result['source'] = r.get('source') or 'rcon'
+        # ⚠️ 不要写成 'rcon:%s' % r.get('source')：下游 source 本身已带 `rcon:` 前缀，
+        #    拼出来会变成 `rcon:rcon:tps`（实测踩到，前端展示很怪）。
+        if not str(result['source']).startswith('rcon'):
+            result['source'] = 'rcon:' + str(result['source'])
+        result['raw'] = r.get('raw') or ''
+        result['commands'] = result['commands'] + (r.get('commands') or [])
+    else:
+        result['note'] = (r.get('note') or '') or (
+            '未能取到 TPS：该实例没有 stdin 通道，且 RCON 不可用'
+            if not sent else 'tps 命令已发送但没读到可用回显，且 RCON 不可用')
+    return result
+
+
 def mark_tps_watched(row: dict) -> None:
     """登记「刚刚有人真的在取这个实例的 TPS」。
 

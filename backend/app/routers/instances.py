@@ -109,29 +109,14 @@ def _decorate(row: dict) -> dict:
     out['tps'] = st['tps']
     out['mspt'] = st['mspt']
     out['tps_available'] = st['tps_available']
-    # ⚠️ 内存里的 TPS 只来自「解析服务端日志」，而**有的服务端根本不把 TPS 写进日志**
-    #    （实测：Purpur 26.x 就不会）—— 于是状态接口一直报 `tps_available=False`，
-    #    前端就显示「TPS 不可用」，**即使面板明明已经通过 RCON 取到了真实数据**
-    #    （`GET /api/instances/{iid}/tps` 那条是好的，返回 `source=rcon:mspt`）。
-    #    修法：内存拿不到时，回退到主动 RCON 取一次（带 5 秒缓存，不会打爆服务端）。
-    #    仍然取不到就如实报不可用 —— **绝不编造数值**。
-    if not st['tps_available'] and st['running']:
-        try:
-            from ..rcon import collect_tps, mspt_scalar, tps_scalar
-            # TTL 给 30 秒：仪表盘 1 秒轮询一次 /status，而 TPS 是**慢变量** —— 
-            # 用默认的 5 秒会让前端把缓存直接踩穿，每次轮询都新开一条 RCON 连接，
-            # 服务端控制台就被 `Thread RCON Client ... started / shutting down` 刷屏。
-            # 采样器那边仍用短 TTL（它要写进指标表，需要新鲜值）。
-            t = collect_tps(row, ttl=300.0)
-            if t.get('available'):
-                # 契约是数字（前端 Number(it.tps)），必须归一成标量，否则显示 NaN
-                out['tps'] = tps_scalar(t.get('tps'))
-                out['mspt'] = mspt_scalar(t.get('mspt'))
-                out['tps_available'] = out['tps'] is not None or out['mspt'] is not None
-                out['tps_source'] = t.get('source')
-        except Exception as e:
-            # 不静默：取不到 TPS 的原因要能在日志里看到（否则只能靠猜）
-            logger.warning('实例 %s 通过 RCON 取 TPS 失败：%s', row.get('id'), e)
+    # ⚠️ 列表接口**不再主动取 TPS**（用户要求：「TPS 不再轮询，只在我点『刷新』时取一次」）。
+    #
+    # 这里原本写的是"内存拿不到就回退 RCON 取一次（带 5 秒缓存，不会打爆服务端）"——
+    # 那正是 RCON 刷屏的起源：`_decorate()` 被实例列表接口调用，而前端会周期性刷新列表，
+    # 于是变成**定时器驱动**的 RCON 连接，服务端控制台被
+    # `Thread RCON Client ... started / shutting down` 长期刷屏。
+    # 这里只如实报告内存里已有的值（可能来自服务端自己打印的 TPS 行）；
+    # 要最新数据请走 `GET /api/instances/{iid}/tps`（优先 stdin，不碰 RCON）。
     out['online_names'] = st['online_names']
     out['dir'] = instance_dir(row)
     out['core_label'] = SOURCE_LABELS.get(row.get('core_type'), row.get('core_type'))
@@ -209,34 +194,18 @@ def status(iid: int, user: dict = Depends(get_current_user)):
     st['ok'] = True
     st['eula'] = serverctl.eula_status(row)
     st['uptime_text'] = parse_uptime(st['uptime'])
-    # ⚠️ 前端（仪表盘 / 实例详情）轮询的就是这个接口，而它**直接返回内存状态**，
-    #    不经过 `_decorate()`。内存里的 tps 只来自「解析服务端日志」，而**有的服务端
-    #    根本不把 TPS 写进日志**（实测 Purpur 26.x 就不写）—— 于是这里一直报
-    #    `tps_available=False`，前端显示「TPS 不可用」，**哪怕面板已经能通过 RCON
-    #    取到真实数据**（`GET /{iid}/tps` 与 `collect_tps()` 都是好的）。
-    #    修法：内存拿不到时回退到 RCON 取一次（collect_tps 自带 5 秒缓存，
-    #    仪表盘 1 秒轮询也不会打爆服务端）；真的取不到就如实报不可用，**不编造数值**。
-    if not st.get('tps_available') and st.get('running'):
-        try:
-            from ..rcon import collect_tps, mspt_scalar, tps_scalar
-            # ⚠️ 这个接口被前端**每秒**轮询，TTL 必须够长：用默认的 5 秒 =
-            #    每 5 秒缓存就过期 = **每 5 秒新开一条 RCON 连接**，服务端控制台被
-            #    `Thread RCON Client ... started / shutting down` 刷屏（用户实测反馈）。
-            #    ※ 踩过的坑：同一文件里有两处 collect_tps 调用（另一处在 `_decorate`
-            #      L125 也已是 ttl=30.0），我第一次只改了一处，于是问题照旧。
-            t = collect_tps(row, ttl=300.0)
-            if t.get('available'):
-                # ⚠️ 前端用的是 `Number(st.tps).toFixed(1)` —— **契约是数字**。
-                #    这里必须归一成标量；直接塞 dict 会渲染成 `NaN`
-                #    （实测踩过：TPS/MSPT 都显示 NaN）。多窗口对象由
-                #    `GET /{iid}/tps` 提供。
-                st['tps'] = tps_scalar(t.get('tps'))
-                st['mspt'] = mspt_scalar(t.get('mspt'))
-                st['tps_available'] = st['tps'] is not None or st['mspt'] is not None
-                st['tps_source'] = t.get('source')
-                st['tps_detail'] = t.get('tps')      # 多窗口明细，前端可选展示
-        except Exception as e:
-            logger.warning('实例 %s 通过 RCON 取 TPS 失败：%s', iid, e)
+    # ⚠️ 这里**不再**去取 TPS。用户明确要求：「TPS 不再轮询，只在我点『刷新』时取一次」。
+    #
+    # 历史教训：这个接口被前端轮询，而内存里的 tps 只来自「解析服务端日志」——
+    # **有的服务端根本不把 TPS 写进日志**（实测 Purpur 26.x 就不写），于是这里
+    # 一直报 `tps_available=False`、前端显示「TPS 不可用」，哪怕面板能通过 RCON 取到。
+    # 我当时的修法是"回退到 RCON 取一次"，由此引入了**定时器驱动的 RCON 轮询**，
+    # 导致服务端控制台被 `Thread RCON Client ... started / shutting down` 长期刷屏
+    # （曾每 5 秒一次 → 调到 30 秒 → 再调到 300 秒，用户仍反馈"一直这样"）。
+    #
+    # 现在改为**完全按需**：这个接口只如实报告内存里已有的值（可能来自服务端自己打印的
+    # TPS 行）；要拿最新数据请调 `GET /{iid}/tps`（优先走 stdin，不碰 RCON）。
+    # **拿不到就是不可用，绝不编造数值。**
     return st
 
 

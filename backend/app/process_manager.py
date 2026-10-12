@@ -708,35 +708,20 @@ class Manager:
                         st = self.status(inst.id)
                         if not st['running'] and st['status'] == ST_STOPPED:
                             continue
-                        # ⚠️ 内存里的 tps 只来自「解析服务端日志」，而**有的服务端根本不把
-                        #    TPS 写进日志**（实测 Purpur 26.x 就不写）—— 于是指标表里的
-                        #    tps/mspt 永远是 NULL，监控曲线一直是空的「TPS 不可用」，
-                        #    **哪怕面板已经能通过 RCON 取到真实数据**。
-                        #    这里回退到 RCON 取一次；取不到仍写 NULL，**绝不编造数值**。
+                        # ⚠️⚠️ TPS 在这里**一次都不取**（用户明确要求：「TPS 不再轮询，
+                        #    只在我点『刷新』时取一次」）。
                         #
-                        # ⚠️⚠️ 但**绝不能让这个回退变成固定周期的 RCON 轮询** ——
-                        #    用户反复反馈服务端控制台被
-                        #    `Thread RCON Client /127.0.0.1 started / shutting down` 刷屏
-                        #    （实测每 27~30 秒一条，21 小时累计 2878 条）。
-                        #    TPS 是**慢变量**，而且下面两个条件说明"大部分时间根本不该采"：
-                        #      ① **没有玩家在线时 TPS 恒为 20**，采它没有任何信息量；
-                        #      ② 没人在看面板时，采了也没人看。
-                        #    所以规则是：**仅当该实例有玩家在线时长这样去采**。
-                        #    玩家数来自日志的进/退服事件（`_LOGIN_RE` / `_LOGOUT_RE`），
-                        #    **本身不需要 RCON**，所以这个前置判断是零成本的。
-                        #    效果：空服时控制台**完全安静**；有人玩时才按 TTL 低频采样。
+                        # 这里是历次 RCON 刷屏的**唯一来源**：采样器每 `sample_interval`
+                        # （默认 5 秒）跑一次，日志里取不到 TPS 就回退走 RCON，靠 TTL 限流
+                        # → 变成"固定周期开 RCON 连接"。用户实测反馈控制台被
+                        # `Thread RCON Client /127.0.0.1 started / shutting down` 刷屏
+                        # （曾每 27~30 秒一条、21 小时累计 2878 条；调 TTL 后降到每 300 秒）。
+                        #
+                        # 现在改成**完全按需**：采样器只记录 CPU / 内存 / 在线人数
+                        # （都不需要 RCON —— 玩家数来自日志进/退服事件），
+                        # TPS 只在用户主动请求 `/tps`（或页面显式拉取）时才去取一次。
+                        # 取不到就写 NULL，**绝不编造数值**（原有行为不变）。
                         tps_v, mspt_v = st['tps'], st['mspt']
-                        if tps_v is None and mspt_v is None and int(st.get('players') or 0) > 0:
-                            try:
-                                from .rcon import collect_tps
-                                # TTL 给 120 秒：TPS 是慢变量，2 分钟粒度足够反映趋势；
-                                # 配合上面的"有玩家在线"前置条件，RCON 连接数被压到最低。
-                                t = collect_tps(row, ttl=300.0)
-                                if t.get('available'):
-                                    tps_v = t.get('tps') or tps_v
-                                    mspt_v = t.get('mspt') or mspt_v
-                            except Exception as e:
-                                logger.warning('实例 %s RCON 取 TPS 失败：%s', inst.id, e)
                         # ⚠️ metrics.tps/mspt 是 REAL 列（单个数），而上面拿到的是
                         #    {'1m':..,'5m':..,'15m':..} 这种 dict —— 直接传给 sqlite3 会
                         #    报 `Error binding parameter N - probably unsupported type`，
