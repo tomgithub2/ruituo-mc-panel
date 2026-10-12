@@ -401,8 +401,70 @@ def _flight_lock(iid):
         return lk
 
 
+#: 实例 id → 上一次**确认能用**的 TPS 命令（命令探测的记忆）。
+#: 为什么要记：`vanilla` / 原版 `fabric` **没有 `tps` 命令**，打了会在服务端控制台
+#: 刷 "Unknown command"；`forge`/`neoforge` 只有 `forge tps`；装了 spark 的核心
+#: 才有 `spark tps`。不同机器装的插件不同，**不能写死一张表**——
+#: 第一次按候选表逐条试，试出能用的那条就记下来，之后只发那一条。
+_tps_cmd_memo = {}
+_tps_cmd_lock = threading.Lock()
+
+
+def _memo_get(iid):
+    with _tps_cmd_lock:
+        return _tps_cmd_memo.get(iid)
+
+
+def _memo_set(iid, cmd):
+    with _tps_cmd_lock:
+        _tps_cmd_memo[iid] = cmd
+
+
+def _candidate_tps_commands(row: dict) -> list:
+    """候选 TPS 命令（按核心给的主命令排前面，后面补上常见的通用命令）。
+
+    ⚠️ 顺序有讲究：先发最可能成功的，命中即停止，避免在控制台刷无用输出。
+    """
+    core = str((row or {}).get('core_type') or '').lower()
+    primary = list(tps_commands_for(core))
+    # 补上其它可能的命令（不同机器装的核心/插件不一样）
+    extra = ['tps', 'mspt', 'spark tps', 'forge tps', 'neoforge tps']
+    out = []
+    for c in primary + extra:
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+def _wait_budget(cfg: dict = None) -> float:
+    """等待回显的总预算（秒）。
+
+    ⚠️ 不写死：慢机器 / 卡顿 / 刚启动的服务端处理一条命令可能要好几秒。
+    优先读配置 `tps_wait_seconds`（1~15），否则按 CPU 核数粗估一个偏保守的值。
+    """
+    try:
+        c = cfg or {}
+        v = c.get('tps_wait_seconds')
+        if v is not None:
+            f = float(v)
+            return max(0.5, min(15.0, f))
+    except Exception:
+        pass
+    # 没有配置时：按机器规模给个保守值（大机器通常也更快）
+    try:
+        import os as _os
+        n = _os.cpu_count() or 2
+    except Exception:
+        n = 2
+    if n >= 8:
+        return 3.0
+    if n >= 4:
+        return 4.0
+    return 6.0
+
+
 def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
-                          wait: float = 1.2) -> dict:
+                          wait: float = None) -> dict:
     """**按需**取一次 TPS：优先走 stdin（不碰 RCON），取不到才回退 RCON。
 
     这是用户明确要求的方式：「TPS 不再轮询，只在我点『刷新』时取一次」。
@@ -427,18 +489,65 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
         inst = manager.get(iid)
         proc = getattr(inst, 'proc', None)
         if proc is not None and proc.poll() is None and getattr(proc, 'stdin', None):
-            # 服务端核心不同，TPS 命令也不同（沿用 collect_tps 里的同一张表）
-            cmds = tps_commands_for((row or {}).get('core_type'))
-            for c in cmds:
+            # TPS 命令因**核心与插件**而异（vanilla/fabric 原版没有 tps 命令），
+            # 所以：先用**记忆里确认可用的那条**；没有记忆才**逐条探测**。
+            #
+            # ⚠️ 探测必须"逐条试、命中即停"，不能一次把候选表全发出去 ——
+            #    实测把 5 条一起发时，服务端控制台会刷一串 "Unknown command"
+            #    （用户很在意控制台干净）。
+            memo = _memo_get(iid)
+            if memo:
+                candidates = [memo]
+            else:
+                candidates = _candidate_tps_commands(row)
+
+            for c in candidates:
                 r = manager.send_command(iid, c)
-                if r.get('ok'):
-                    sent = True
-                    result['commands'].append({'cmd': c, 'ok': True,
-                                              'via': 'stdin'})
-                else:
-                    result['commands'].append({'cmd': c, 'ok': False,
-                                              'via': 'stdin',
+                if not r.get('ok'):
+                    result['commands'].append({'cmd': c, 'ok': False, 'via': 'stdin',
                                               'error': (r.get('error') or '')[:200]})
+                    continue
+                result['commands'].append({'cmd': c, 'ok': True, 'via': 'stdin'})
+                sent = True
+                if memo:
+                    break        # 记忆里的命令已发出，不必再试别的
+                # 探测：给这一条**最多 1.5 秒**判定它有没有产出 TPS 行，
+                # 有就记住它、停止探测；没有才试下一条。
+                probe_deadline = time.time() + 1.5
+                probe_lines = []
+                probe_size = 0
+                try:
+                    wd = getattr(inst, 'workdir', '') or ''
+                    lp = os.path.join(wd, 'logs', 'latest.log') if wd else ''
+                    probe_size = os.path.getsize(lp) if lp and os.path.isfile(lp) else 0
+                except Exception:
+                    lp, probe_size = '', 0
+                found = False
+                while time.time() < probe_deadline:
+                    time.sleep(0.25)
+                    try:
+                        if lp and os.path.isfile(lp):
+                            cur = os.path.getsize(lp)
+                            if cur < probe_size:
+                                probe_size = 0
+                            if cur > probe_size:
+                                with open(lp, 'rb') as f:
+                                    f.seek(probe_size)
+                                    probe_lines.extend(
+                                        [x for x in f.read(cur - probe_size)
+                                         .decode('utf-8', 'replace').split('\n') if x.strip()])
+                                probe_size = cur
+                    except Exception:
+                        pass
+                    if probe_lines and parse_log_tps(probe_lines).get('tps'):
+                        found = True
+                        break
+                if found:
+                    _memo_set(iid, c)
+                    result['cmd_memo'] = c
+                    size0 = probe_size          # 接上已读位置，避免重复读
+                    break
+                # 该命令没产出 TPS（多半是 "Unknown command"）→ 试下一条
             if sent:
                 # ⚠️ 取回显有两条路，**优先读日志文件**：
                 #   `_pump` 从子进程 stdout 读到的每一行都会**同时**写进
@@ -459,27 +568,47 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                 except Exception:
                     logpath, size0 = '', 0
 
-                # 轮询最多 ~2.4 秒，等到出现 TPS 行就立刻返回（通常 <1 秒）
-                deadline = time.time() + 2.4
+                # 轮询等待回显：预算自适应（慢机器给更多时间），
+                # 一出现 TPS 行就立刻返回（通常 <1 秒），所以**不影响正常机器的速度**。
+                budget = float(wait) if wait else _wait_budget(cfg)
+                deadline = time.time() + max(0.5, budget)
+                # ⚠️ 累积所有新读到的行，而不是每轮覆盖：
+                #    一条 `tps` 命令的回显是多行的（TPS 行 + tick times 行），
+                #    日志是**边写边读**的 —— 若每轮覆盖 `fresh`，
+                #    后一轮只读到 tick times 行时就会把刚才的 TPS 行丢掉。
+                collected = []
                 while True:
                     time.sleep(0.25)
                     if logpath and os.path.isfile(logpath):
                         try:
                             cur = os.path.getsize(logpath)
+                            # ⚠️ 日志**轮转**：服务端会把 latest.log 改名成
+                            #    previous-<时间戳>.log、再新建一个空的 latest.log。
+                            #    此时新文件比记录的小 —— 若还按 size0 去 seek，
+                            #    会一直读不到内容（表现为"偶发拿不到 TPS"）。
+                            #    判据：cur < size0 即发生轮转，游标归零重读。
+                            if cur < size0:
+                                size0 = 0
                             if cur > size0:
                                 with open(logpath, 'rb') as f:
                                     f.seek(size0)
                                     chunk = f.read(cur - size0)
+                                size0 = cur
                                 text = chunk.decode('utf-8', 'replace')
-                                fresh = [x for x in text.split('\n') if x.strip()]
+                                newlines = [x for x in text.split('\n') if x.strip()]
+                                if newlines:
+                                    collected.extend(newlines)
                         except Exception:
-                            fresh = []
-                    if fresh:
-                        p = parse_log_tps(fresh)
-                        if p.get('tps'):
+                            pass
+                    if collected:
+                        p = parse_log_tps(collected)
+                        # 两个值都拿到才提前结束；只拿到一个就继续轮询到超时，
+                        # 给"另一行还没落盘"留时间（慢机器/卡顿时尤其需要）。
+                        if p.get('tps') and p.get('mspt'):
                             break
                     if time.time() >= deadline:
                         break
+                fresh = collected
 
                 # 日志文件没取到 → 回退内存 ring
                 if not fresh:
@@ -491,6 +620,15 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                         result['note'] = 'stdin 读取回显失败：%s' % e
                         fresh = []
 
+                # ⚠️ 记忆失效保护：用了记忆里的命令却**没拿到 TPS**，
+                #    说明它在这台机器上不再可用（核心换了 / 插件被移除 / spark 卸载）——
+                #    清掉记忆，下次重新按候选表探测。
+                #    没有这层保护，一次错误的记忆会让 TPS 永远拿不到。
+                if memo and not result.get('available'):
+                    _memo_set(iid, None)
+                    result['note'] = (result.get('note') or '') + \
+                        '（记忆的命令 `%s` 失效，已清除，将在下次重新探测）' % memo
+
                 if fresh:
                     p = parse_log_tps(fresh)
                     result['log_signals'] = p.get('log_signals')
@@ -500,6 +638,18 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                         result['source'] = 'stdin'
                         result['raw'] = p.get('raw', '')
                         result['tps_note'] = p.get('note') or ''
+                        # ⚠️ **记住是哪条命令拿到的**：不同机器装的核心/插件不同，
+                        #    vanilla / 原版 fabric 没有 `tps` 命令、forge 只有 `forge tps`、
+                        #    装了 spark 才有 `spark tps`。记下来之后只发这一条，
+                        #    不会再往服务端控制台刷 "Unknown command"。
+                        hit_cmd = None
+                        for c in (result.get('commands') or []):
+                            if c.get('ok') and c.get('via') == 'stdin':
+                                hit_cmd = c.get('cmd')
+                                break
+                        if hit_cmd:
+                            _memo_set(iid, hit_cmd)
+                            result['cmd_memo'] = hit_cmd
                     if p.get('mspt') and not result['mspt']:
                         result['mspt'] = p['mspt']
                         result['mspt_source'] = 'stdin'
