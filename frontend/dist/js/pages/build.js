@@ -85,10 +85,10 @@ window.PagesBuild = (function () {
         '<div class="card-head"><h3>1. 上传建筑文件</h3>' +
           '<div class="right"><span class="badge">上限 ' + U.fmtSize(f.max_size || 0) + '</span></div></div>' +
         '<div class="drop-zone" id="b-drop">' + Icon.svg('uploadCloud', 26) +
-          '<div class="mt">把 <b>.schem / .schematic / .nbt / .litematic / .zip</b> 拖进来</div>' +
+          '<div class="mt">把 <b>.schem / .schematic / .nbt / .litematic / .bdx / .zip</b> 拖进来</div>' +
           '<div class="small mt">或者 <button class="btn sm" id="b-pick">选择文件</button></div></div>' +
         '<input type="file" id="b-file" style="display:none" ' +
-          'accept=".schem,.schematic,.nbt,.litematic,.mcstructure,.zip" />' +
+          'accept=".schem,.schematic,.nbt,.litematic,.mcstructure,.bdx,.zip" />' +
         (st.up
           ? '<div class="card mt" style="background:var(--bg-sunken)">' +
               '<div class="row"><span class="badge ' + (FORMAT_BADGE[st.up.format] || '') + '">' +
@@ -310,7 +310,7 @@ window.PagesBuild = (function () {
       if (!h.length) {
         return '<div class="card">' + C.empty('building', '还没有导入过建筑',
           '把 schematic 拖进上面的上传区，填个坐标就能导入 —— 不需要机器人进服，也不需要 OP 账号在线。' +
-          '支持 .schem / .schematic / .nbt / .litematic 与包含多个建筑的 .zip。', '') + '</div>';
+          '支持 .schem / .schematic / .nbt / .litematic / .bdx（网易中国版，含命令块自动转 Java 命令）与包含多个建筑的 .zip。', '') + '</div>';
       }
       return '<div class="card"><div class="card-head"><h3>导入记录</h3>' +
         '<div class="right"><span class="badge">' + h.length + '</span></div></div>' +

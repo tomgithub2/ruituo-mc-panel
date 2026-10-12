@@ -40,7 +40,7 @@ MAX_ZIP_MEMBERS = 512             # zip 成员数上限
 MAX_ZIP_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_ZIP_TOTAL_BYTES = 512 * 1024 * 1024
 MAX_ZIP_RATIO = 400               # 单成员压缩比上限（防 zip 炸弹）
-SUPPORTED_EXTS = ('.schem', '.schematic', '.nbt', '.litematic')
+SUPPORTED_EXTS = ('.schem', '.schematic', '.nbt', '.litematic', '.bdx')
 ARCHIVE_EXTS = ('.zip',)
 RECOGNIZED_EXTS = SUPPORTED_EXTS + ARCHIVE_EXTS + ('.mcstructure', '.snbt')
 
@@ -778,6 +778,8 @@ def detect_format(path: str, root: Tag = None) -> str:
         return 'mcstructure'
     if ext == '.nbt':
         return 'nbt'
+    if ext == '.bdx':
+        return 'bdx'
     if root is not None:
         if cget(root, 'Regions') is not None and cget(root, 'MinecraftDataVersion') is not None:
             return 'litematic'
@@ -818,6 +820,14 @@ def parse_file(path: str, limits: NbtLimits = None, member: str = '') -> Schemat
     ext = os.path.splitext(path)[1].lower()
     if ext in ARCHIVE_EXTS:
         return parse_zip(path, limits, member=member)
+    if ext == '.bdx':
+        # BDX 是网易中国版的「操作码流」格式：'BD@' + brotli 压缩，
+        # 与 NBT 系格式完全不同，所以在这里分流，不走 parse_nbt_bytes。
+        from . import bdx as _bdx
+        try:
+            return _bdx.parse_bdx(path, limits, source=path)
+        except _bdx.BdxError as e:
+            raise FormatError('BDX 解析失败：%s' % e)
     if ext == '.mcstructure':
         raise FormatError('基岩版 .mcstructure 需要先转换为 Java 版结构（本版本仅识别，不支持导入）')
     if ext not in SUPPORTED_EXTS:

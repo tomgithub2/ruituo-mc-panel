@@ -7,3 +7,5 @@ pydantic>=2.6
 httpx>=0.27
 # 远程更新的清单 RSA 验签（缺失会导致更新功能不可用）
 cryptography>=41.0
+# 网易中国版 .bdx 建筑文件是 brotli 压缩的（缺了就无法导入 .bdx）
+brotli>=1.1
