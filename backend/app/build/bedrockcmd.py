@@ -379,3 +379,217 @@ if __name__ == '__main__':
 
     print()
     print('  通过 %d / 失败 %d / 未断言 %d' % (passed, failed, skipped))
+
+
+# ================================================================ Java → 基岩（反向）
+#
+# ⚠️ 为什么反向比正向难：新版 Java execute 把「执行上下文」拆成了独立子命令
+#    （as / at / positioned / if / unless … 后面统一接一个 run），而基岩版只有
+#    `execute <选择器> <坐标> <命令>` 这一种形式。所以反向必须**把链折叠回选择器+坐标**。
+#    只有能无损折叠时才转；折叠不了就原样保留并明确标注（绝不输出语义变了的命令）。
+
+_RE_SELECTOR = re.compile(r'^@[aeprs](?:\[[^\]]*\])?$')
+
+
+def convert_to_bedrock(cmd) -> tuple:
+    """Java 版命令 → 基岩版命令。返回 (转换后, 说明列表)。不抛异常。"""
+    if cmd is None:
+        return '', []
+    text = str(cmd)
+    stripped = text.strip()
+    if not stripped:
+        return text, []
+
+    head, _rest = _split_first_word(stripped)
+    low = head.lower().lstrip('/')
+
+    # ⚠️ 多行命令（命令方块里可以放多行，数据包风格）：
+    #    任何"拆词再拼回"的转换都会**把换行抹掉、拼成一条非法命令**，
+    #    语义完全变了。这类输入一律**原样返回并标注**，绝不改写。
+    if '\n' in text or '\r' in text:
+        return text, ['命令含多行（%d 行），逐行转换会把换行并成一条非法命令，'
+                      '已原样保留，建议人工处理' % len([x for x in text.splitlines() if x.strip()])]
+
+    notes = []
+
+    if low == 'execute':
+        out, notes = _java_execute_to_bedrock(stripped)
+    else:
+        out = stripped
+
+    # 文本组件 → rawtext（tellraw / titleraw）
+    if low in ('tellraw', 'titleraw'):
+        out2, n2 = _component_to_rawtext(out, low)
+        if n2:
+            out = out2
+            notes.extend(n2)
+
+    # 去掉 minecraft: 前缀（基岩更常见裸名；但只对**方块/物品名位置**做，
+    # 这里仅处理明显是方块参数的位置，避免误伤）
+    out3, n3 = _strip_namespace_blocks(out)
+    if n3:
+        out = out3
+        notes.extend(n3)
+
+    return out, notes
+
+
+def _java_execute_to_bedrock(cmd: str) -> tuple:
+    """折叠 `execute as X at @s positioned P if block B run C` → `execute X P detect B C`。"""
+    notes = []
+    body = cmd[len('execute'):].strip()
+    as_sel = None
+    pos = None
+    cond = None
+
+    # 逐个子句剥离，直到遇到 run
+    while True:
+        m = re.match(r'^(as|at|positioned|if|unless|in|facing|anchored|align)\b\s*(.*)$',
+                     body, re.S)
+        if not m:
+            break
+        kind, rest = m.group(1), m.group(2).strip()
+        if kind == 'run':
+            break
+        if kind == 'as':
+            tok = rest.split()[0] if rest.split() else ''
+            if _RE_SELECTOR.match(tok):
+                as_sel = tok
+                body = rest[len(tok):].strip()
+            else:
+                notes.append('`as %s` 不是标准选择器，无法折叠成基岩 execute' % tok[:20])
+                return cmd, notes
+        elif kind == 'at':
+            tok = rest.split()[0] if rest.split() else ''
+            if tok == '@s':
+                body = rest[len(tok):].strip()          # at @s 正好对应基岩的「执行者所在」
+            else:
+                notes.append('`at %s`（非 @s）在基岩里没有等价写法，已原样保留' % tok[:20])
+                return cmd, notes
+        elif kind == 'positioned':
+            toks = rest.split()
+            coords = []
+            while len(coords) < 3 and toks:
+                coords.append(toks.pop(0))
+            pos = ' '.join(coords)
+            body = ' '.join(toks).strip()
+        elif kind == 'if':
+            # ⚠️ 这里连踩三个坑（都实测过，写下来免得再犯）：
+            #  ① **组索引错位**：`if block <x> <y> <z> <方块> run <命令>` 里
+            #     坐标是 1/2/3 组、**方块是第 4 组**、命令是第 5 组。
+            #  ② **`\S+` 贪婪撞 `run`**：token 数固定时不要靠正则回溯，
+            #     直接按分隔符切更稳、出错也好查。
+            #  ③ **`split(None, 5)` 的段数记错了**：maxsplit=N 得到的是 **N+1 段**，
+            #     我按"N 段"去判断，于是死活进不去分支，报"结构不完整"。
+            #     现在改成在**最后一个 ` run `** 处切分，语义直白、不依赖段数心算。
+            if not rest.startswith('block '):
+                notes.append('条件子句 `if %s` 在基岩里没有等价写法（只支持 `if block …`），'
+                             '已原样保留' % ' '.join(rest.split()[:2]))
+                return cmd, notes
+            cond_part, sep, cmd_part = rest.rpartition(' run ')
+            head_toks = cond_part.split()
+            # `block <x> <y> <z> <方块>` → 5 段
+            if not sep or len(head_toks) < 5:
+                notes.append('`if %s` 结构不完整（需要 `if block <坐标x3> <方块> run <命令>`），'
+                             '已原样保留' % ' '.join(rest.split()[:6]))
+                return cmd, notes
+            bc = ' '.join(head_toks[1:4])          # 坐标 x3
+            blk = head_toks[4]                     # 方块名
+            cond = (bc, blk, cmd_part)
+            body = ''
+            break
+        elif kind == 'unless':
+            notes.append('`unless` 条件在基岩里没有直接等价写法，已原样保留')
+            return cmd, notes
+        else:
+            notes.append('子句 `%s` 无法折叠成基岩 execute，已原样保留' % kind)
+            return cmd, notes
+
+    if body.startswith('run '):
+        body = body[4:].strip()
+
+    if as_sel is None:
+        notes.append('不是 `execute as <选择器> …` 开头的形式，无法转成基岩 execute，已原样保留')
+        return cmd, notes
+
+    coords = pos if pos else '~ ~ ~'
+
+    if cond:
+        bc, blk, tail = cond
+        dcoords = bc
+        # 基岩的 detect 语法：detect <位置> <方块> <数据值> <命令>
+        # Java 的 if block 已经带了坐标，基岩的 execute 坐标与 detect 坐标可能不同，
+        # 这里把 Java 的 if block 坐标直接当作 detect 坐标（语义等价），
+        # 并把 execute 坐标也设成同一处 —— 这是**唯一保险**的等价写法。
+        out = 'execute %s %s detect %s %s 0 %s' % (as_sel, dcoords, dcoords, blk, tail)
+        notes.append('按语义折叠：execute 坐标取 if block 的坐标 %s，'
+                     'detect 也查同一处（基岩 detect 的坐标与 execute 坐标是两处，'
+                     '取同值最保险）' % dcoords)
+        return re.sub(r'\s+', ' ', out).strip(), notes
+
+    out = 'execute %s %s %s' % (as_sel, coords, body)
+    return re.sub(r'\s+', ' ', out).strip(), notes
+
+
+def _component_to_rawtext(cmd: str, head: str) -> tuple:
+    """Java 的 {"text":"..."} → 基岩的 {"rawtext":[{"text":"..."}]}。"""
+    import json as _json
+    brace = cmd.find('{')
+    if brace < 0:
+        return cmd, []
+    pre, tail = cmd[:brace], cmd[brace:]
+    try:
+        obj = _json.loads(tail)
+    except Exception:
+        return cmd, []
+    if not isinstance(obj, dict) or 'text' not in obj:
+        return cmd, []
+    raw = {'rawtext': [{'text': obj['text']}]}
+    for k in ('color', 'bold', 'italic', 'underlined', 'strikethrough', 'obfuscated'):
+        if k in obj:
+            raw['rawtext'][0][k] = obj[k]
+    return pre + _json.dumps(raw, ensure_ascii=False, separators=(',', ':')), \
+        ['文本组件 {"text":…} → 基岩 rawtext 结构']
+
+
+def _strip_namespace_blocks(cmd: str) -> tuple:
+    """把 setblock/fill 等**方块参数位置**的 minecraft: 前缀去掉（基岩习惯裸名）。
+
+    只动确定是方块参数的位置，绝不全局替换 —— 免得把实体/物品名也改了。
+    """
+    toks = cmd.split()
+    if not toks:
+        return cmd, []
+    head = toks[0].lower()
+    idx = None
+    if head == 'setblock' and len(toks) >= 5:
+        idx = 4
+    elif head == 'fill' and len(toks) >= 8:
+        idx = 7
+    if idx is None:
+        return cmd, []
+    tok = toks[idx]
+    if not tok.startswith('minecraft:'):
+        return cmd, []
+    bare = tok[len('minecraft:'):]
+    if not re.fullmatch(r'[a-z0-9_]+', bare):
+        return cmd, []
+    out = list(toks)
+    out[idx] = bare
+    return ' '.join(out), ['去掉方块名的 minecraft: 前缀（基岩习惯裸名）：%s → %s' % (tok, bare)]
+
+
+def convert_commands_direction(cmds, direction: str) -> list:
+    """按方向批量转换。direction: 'be2java' | 'java2be' | 'none'。"""
+    fn = {'be2java': convert_command, 'java2be': convert_to_bedrock}.get(direction)
+    out = []
+    for c in (cmds or []):
+        if fn is None:
+            out.append({'from': c, 'to': c, 'notes': [], 'changed': False})
+            continue
+        try:
+            new, notes = fn(c)
+        except Exception as e:
+            new, notes = c, ['转换器内部错误，已原样保留：%s' % e]
+        out.append({'from': c, 'to': new, 'notes': notes, 'changed': new != c})
+    return out

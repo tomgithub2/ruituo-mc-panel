@@ -231,12 +231,22 @@ class PreviewIn(BaseModel):
     engine: str = 'auto'
     member: str = ''
     strict: bool = False
+    # 命令方块里的命令如何转换（仅 .bdx 生效）：
+    #   'be2java' 基岩→Java（默认，BDX 里的命令是基岩语法，导入 Java 服要转）
+    #   'java2be' Java→基岩（把 Java 语法的命令改成基岩语法）
+    #   'none'    不转换，原样保留
+    cmd_convert: str = 'be2java'
 
 
 def _load_schematic(iid: int, body) -> formats.Schematic:
     meta = _load_upload(iid, body.upload_id)
+    # 命令转换方向透传到解析层（只有 .bdx 会用到；其它格式的命令按各自默认处理）
+    direction = str(getattr(body, 'cmd_convert', '') or 'be2java').lower()
+    if direction not in ('be2java', 'java2be', 'none'):
+        direction = 'be2java'
     try:
-        sch = formats.parse_file(meta['path'], member=getattr(body, 'member', '') or '')
+        sch = formats.parse_file(meta['path'], member=getattr(body, 'member', '') or '',
+                                 cmd_convert=direction)
     except formats.FormatError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -342,11 +352,17 @@ def do_import(iid: int, body: ImportIn, request: Request,
         'include_entities': bool(body.include_entities),
         'include_biome': bool(body.include_biome), 'engine': body.engine,
         'backup': bool(body.backup), 'member': body.member,
+        # 记录用户选的命令转换方向（BDX）：be2java / java2be / none
+        'cmd_convert': str(getattr(body, 'cmd_convert', 'be2java')),
     }
+    _DIR_LABEL = {'be2java': '基岩→Java', 'java2be': 'Java→基岩', 'none': '不转换'}
+    _dirv = str(getattr(body, 'cmd_convert', 'be2java'))
+    _dirtext = _DIR_LABEL.get(_dirv, _dirv)
     audit_mod.audit(user['username'], request.client.host if request.client else '',
                     'build.import.request', iid,
                     f'请求导入 {task.filename} → 维度 {body.dimension} 坐标 '
-                    f'({body.x},{body.y},{body.z}) 引擎 {body.engine} 备份 {body.backup}',
+                    f'({body.x},{body.y},{body.z}) 引擎 {body.engine} 备份 {body.backup}'
+                    f' 命令转换 {_dirtext}',
                     level='warn')
     tasks.start(task)
     return {'ok': True, 'task_id': task.id, 'status': task.status,
@@ -445,6 +461,19 @@ def formats_info(user: dict = Depends(get_current_user)):
             'nbt_depth': 64,
             'nbt_array_items': 1 << 24,
             'decompressed_bytes': 512 * 1024 * 1024,
+        },
+        # BDX 命令块里的命令如何转换（前端据此渲染选项，别在前端硬编码）
+        'cmd_convert': {
+            'default': 'be2java',
+            'applies_to': ['.bdx'],
+            'options': [
+                {'id': 'be2java', 'label': '基岩 → Java（推荐）',
+                 'note': 'BDX 里存的是基岩版命令语法，导入 Java 服需要转换'},
+                {'id': 'java2be', 'label': 'Java → 基岩',
+                 'note': '把已是 Java 语法的命令改回基岩语法'},
+                {'id': 'none', 'label': '不转换',
+                 'note': '原样保留命令块内容'},
+            ],
         },
         'engines': [
             {'id': 'offline', 'label': '离线写入 Anvil（引擎 B）',

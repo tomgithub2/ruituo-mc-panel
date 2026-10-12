@@ -32,6 +32,10 @@ window.PagesBuild = (function () {
       include_entities: false,
       include_biome: false,
       engine: '',
+      /* 命令方块里的命令如何转换（仅 .bdx 生效）：
+         be2java 基岩→Java（默认）· java2be Java→基岩 · none 不转换。
+         选项由后端 /api/build/formats 的 cmd_convert.options 提供，前端不硬编码。 */
+      cmd_convert: 'be2java',
       running: false,
       hasWorldEdit: false,
       formats: null,
@@ -44,6 +48,33 @@ window.PagesBuild = (function () {
     if (inst) st.running = !!inst.running;
     else if (ctx.instance) st.running = !!ctx.instance.running;
     st.hasWorldEdit = !!(ctx.hasWorldEdit);
+
+    /* ---- 命令转换方向（仅 .bdx）：选项以后端为准，不在前端硬编码 ----
+       ⚠️ 用 `st.formats.cmd_convert` 而不是自己写死三个选项 —— 后端加方向时前端自动跟上。
+       若后端旧版本没返回该字段，退回内置默认（此时至少不会让界面缺控件）。 */
+    function cmdConvMeta() {
+      var m = st.formats && st.formats.cmd_convert;
+      if (m && m.options && m.options.length) return m;
+      return { default: 'be2java', options: [{ id: 'be2java', label: '基岩 → Java（推荐）' }] };
+    }
+    function cmdConvOptions() { return cmdConvMeta().options; }
+    function currentConvNote() {
+      var cur = st.cmd_convert;
+      var hit = cmdConvOptions().filter(function (o) { return o.id === cur; })[0];
+      return (hit && hit.note) || '';
+    }
+    /* 当前上传的是不是 .bdx。
+       ⚠️ 上传响应里真实可用的字段是 `st.up.format`（后端识别的格式名）与
+          `st.up._name`（原文件名）—— 我先写成 `st.upload.filename` 是**凭空引用**，
+          项目里根本没有那个字段（`st.up` 才是）。所以以 format 为主判据。 */
+    function isBdx() {
+      var u = st.up;
+      if (!u) return false;
+      var f = String(u.format || '').toLowerCase();
+      if (f === 'bdx') return true;
+      var n = String(u._name || u.filename || '') + '::' + String(st.member || '');
+      return /\.bdx(\b|$)/i.test(n);
+    }
 
     function draw() {
       var canImport = !!(st.rep && st.rep.ok && st.engine && st.task === null);
@@ -145,6 +176,19 @@ window.PagesBuild = (function () {
                 return '<option value="' + o[0] + '"' + (st.place_mode === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
               }).join('') + '</select></div>' +
         '</div>' +
+        /* 命令转换方向：只在 .bdx 时出现（其它格式的命令块按各自默认处理）。
+           选项来自后端 cmd_convert.options —— 前端不硬编码，后端加了新方向这里自动出现。 */
+        (isBdx()
+          ? '<div class="field"><label>命令方块里的命令如何转换' +
+            '<span class="hint">仅 .bdx</span></label><select id="b-cmdconv">' +
+            (cmdConvOptions().map(function (o) {
+              return '<option value="' + U.esc(o.id) + '"' +
+                (st.cmd_convert === o.id ? ' selected' : '') + '>' + U.esc(o.label) + '</option>';
+            }).join('')) + '</select>' +
+            (currentConvNote()
+              ? '<div class="hint">' + U.esc(currentConvNote()) + '</div>' : '') +
+            '</div>'
+          : '') +
         (st.place_mode === 'replace_list'
           ? '<div class="field"><label>要替换的方块清单（逗号或换行分隔）</label>' +
             '<textarea class="mono" id="b-repl" placeholder="minecraft:stone, minecraft:dirt">' + U.esc(st.replace_list) + '</textarea></div>'
@@ -388,6 +432,13 @@ window.PagesBuild = (function () {
       if (mode) mode.addEventListener('change', function () { st.place_mode = mode.value; draw(); });
       var repl = document.getElementById('b-repl');
       if (repl) repl.addEventListener('change', function () { st.replace_list = repl.value; });
+      /* 命令转换方向（仅 .bdx）：改了就重画（刷新下方说明文字），并让预检结果失效 */
+      var cconv = document.getElementById('b-cmdconv');
+      if (cconv) cconv.addEventListener('change', function () {
+        st.cmd_convert = cconv.value;
+        st.rep = null;          // 方向变了，之前的预检结论不再适用
+        draw();
+      });
       document.querySelectorAll('[data-rot]').forEach(function (b) {
         b.addEventListener('click', function () { st.rotate = b.getAttribute('data-rot'); st.rep = null; draw(); });
       });
@@ -487,7 +538,8 @@ window.PagesBuild = (function () {
           x: st.x, y: st.y, z: st.z, dimension: st.dimension,
           rotate: st.rotate, mirror: st.mirror, place_mode: st.place_mode,
           replace_list: st.replace_list, include_entities: st.include_entities,
-          mc_version: st.mcVersion || '', engine: 'auto'
+          mc_version: st.mcVersion || '', engine: 'auto',
+          cmd_convert: st.cmd_convert
         }).then(function (r) {
           st.rep = r;
           st.engine = (r && r.ok && r.engine_recommended) ? r.engine_recommended : '';
@@ -505,7 +557,8 @@ window.PagesBuild = (function () {
         upload_id: st.up.upload_id, x: st.x, y: st.y, z: st.z, dimension: st.dimension,
         rotate: st.rotate, mirror: st.mirror, place_mode: st.place_mode,
         replace_list: st.replace_list, include_entities: st.include_entities,
-        mc_version: st.mcVersion || '', engine: st.engine, backup: true
+        mc_version: st.mcVersion || '', engine: st.engine, backup: true,
+        cmd_convert: st.cmd_convert
       }).then(function (r) {
         if (!r.ok) { Toast.err(r.error); return; }
         st.task = Build.normalizeTask({ task_id: r.task_id, status: r.status || 'parsing',

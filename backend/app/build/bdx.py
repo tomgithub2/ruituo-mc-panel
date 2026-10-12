@@ -599,22 +599,38 @@ def _state_to_entry(state: str) -> 'PaletteEntry':
 
 
 def to_schematic(author: str, ops: list, strings: list, warnings: list,
-                 source: str = '', convert_commands: bool = True,
+                 source: str = '', cmd_convert: str = 'be2java',
                  max_blocks: int = 2_000_000):
     """把操作流落地成 Schematic（面板内部统一结构）。
 
-    `convert_commands=True` 时把命令块里的基岩命令转成 Java 语法
-    （转换器在 bedrockcmd 模块；缺失时**原样保留命令并记警告**，不静默丢命令）。
+    `cmd_convert` 决定命令方块里的命令怎么转（**用户可选方向**）：
+      · 'be2java'（默认）基岩版 → Java 版：BDX 里存的本来就是基岩语法，导入 Java 服要转
+      · 'java2be' Java 版 → 基岩版：把已是 Java 语法的命令改回基岩语法
+      · 'none'    不转换，原样保留
+    转换器模块缺失时**原样保留命令并记警告**，不静默丢命令。
     """
+    direction = (cmd_convert or 'be2java').lower()
+    if direction not in ('be2java', 'java2be', 'none'):
+        direction = 'be2java'
 
     # 命令转换器（可选模块，缺失时降级为"原样保留 + 警告"）
     conv = None
-    if convert_commands:
+    if direction != 'none':
         try:
             from . import bedrockcmd as conv           # noqa: F401
         except Exception:
             conv = None
             warnings.append('命令转换器（bedrockcmd）不可用，命令块内容将原样保留')
+
+    def _convert(raw: str):
+        """按方向转换一条命令，返回 (结果, 说明)。"""
+        if direction == 'none' or conv is None or not (raw or '').strip():
+            return raw, []
+        fn = conv.convert_command if direction == 'be2java' else conv.convert_to_bedrock
+        try:
+            return fn(raw)
+        except Exception as e:
+            return raw, ['命令转换出错，已原样保留：%s' % e]
 
     x = y = z = 0
     blocks = []
@@ -642,14 +658,14 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
             continue
 
         if nm == 'SetCommandBlockData':
-            consumed = _apply_set_cmd(blocks, x, y, z, d, conv, warnings,
+            consumed = _apply_set_cmd(blocks, x, y, z, d, _convert, warnings,
                                       converted_cmds, kept_cmds)
             if not consumed:
                 skipped[nm] = skipped.get(nm, 0) + 1
             continue
 
         if nm in ('PlaceCommandBlockWithCommandBlockData',):
-            blocks.append(_mk_cmd_block(d, x, y, z, conv, warnings,
+            blocks.append(_mk_cmd_block(d, x, y, z, _convert, warnings,
                                         converted_cmds, kept_cmds,
                                         state='minecraft:command_block'))
             continue
@@ -659,7 +675,7 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
                                                  d.get('blockData') or 0)
             if note:
                 warnings.append(note)
-            blocks.append(_mk_cmd_block(d, x, y, z, conv, warnings,
+            blocks.append(_mk_cmd_block(d, x, y, z, _convert, warnings,
                                         converted_cmds, kept_cmds, state=state))
             continue
 
@@ -723,18 +739,12 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
     return sch
 
 
-def _mk_cmd_block(d: dict, x: int, y: int, z: int, conv, warnings,
+def _mk_cmd_block(d: dict, x: int, y: int, z: int, convert, warnings,
                   converted_cmds: list, kept_cmds: list, state: str):
-    from .formats import Block
+    """造一个命令块。`convert` 是**方向感知**的转换闭包（由 to_schematic 注入）。"""
     raw = d.get('command') or ''
-    java = raw
-    notes = []
-    if raw.strip() and conv is not None:
-        try:
-            java, notes = conv.convert_command(raw)
-        except Exception as e:
-            notes = ['命令转换器出错，已原样保留：%s' % e]
-            java = raw
+    java, notes = convert(raw)
+    notes = list(notes or [])
     if not raw.strip():
         notes = []
     elif java != raw:
@@ -745,19 +755,19 @@ def _mk_cmd_block(d: dict, x: int, y: int, z: int, conv, warnings,
     return {'x': x, 'y': y, 'z': z, 'state': state, 'nbt': be}
 
 
-def _apply_set_cmd(blocks: list, x: int, y: int, z: int, d: dict, conv, warnings,
+def _apply_set_cmd(blocks: list, x: int, y: int, z: int, d: dict, convert, warnings,
                    converted_cmds: list, kept_cmds: list) -> bool:
     """SetCommandBlockData(26) 是给**已有**命令块补命令，找最近的那个命令块改。"""
     for b in reversed(blocks):
         if 'command_block' in (b.get('state') or ''):
             raw = d.get('command') or ''
-            java, notes = (conv.convert_command(raw) if (conv and raw.strip()) else (raw, []))
-            b['nbt'] = _command_block_entity(d, java, notes)
+            java, notes = convert(raw)
+            b['nbt'] = _command_block_entity(d, java, list(notes or []))
             if raw.strip():
                 if java != raw:
-                    converted_cmds.append({'from': raw, 'to': java, 'notes': notes})
+                    converted_cmds.append({'from': raw, 'to': java, 'notes': list(notes or [])})
                 else:
-                    kept_cmds.append({'cmd': raw, 'notes': notes})
+                    kept_cmds.append({'cmd': raw, 'notes': list(notes or [])})
             return True
     warnings.append('SetCommandBlockData 之前没有命令块，已跳过')
     return False
@@ -789,13 +799,23 @@ def _to_tag(v):
 
 # ================================================================ 对外入口
 
-def parse_bdx(path: str, limits=None, convert_commands: bool = True, source: str = ''):
-    """解析磁盘上的 .bdx 文件 → Schematic。"""
+def parse_bytes(raw: bytes, limits=None, source: str = '',
+                cmd_convert: str = 'be2java'):
+    """解析**已在内存里**的 .bdx 数据 → Schematic（供 zip 成员等场景复用）。"""
+    inner = decompress_inner(raw)
+    author, ops, strings, warns = scan_operations(inner)
+    return to_schematic(author, ops, strings, warns,
+                        source=source, cmd_convert=cmd_convert)
+
+
+def parse_bdx(path: str, limits=None, source: str = '',
+              cmd_convert: str = 'be2java'):
+    """解析磁盘上的 .bdx 文件 → Schematic。
+
+    `cmd_convert`: 'be2java'（默认）| 'java2be' | 'none' —— 见 to_schematic。
+    """
     if not os.path.isfile(path):
         raise BdxError('文件不存在')
     with open(path, 'rb') as f:
         raw = f.read()
-    inner = decompress_inner(raw)
-    author, ops, strings, warns = scan_operations(inner)
-    return to_schematic(author, ops, strings, warns,
-                        source=source or path, convert_commands=convert_commands)
+    return parse_bytes(raw, limits, source=source or path, cmd_convert=cmd_convert)

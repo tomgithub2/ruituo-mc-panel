@@ -812,20 +812,27 @@ def parse_nbt_bytes(raw: bytes, name: str, limits: NbtLimits = None) -> Schemati
     raise FormatError(f'无法识别的建筑文件格式：{fmt}')
 
 
-def parse_file(path: str, limits: NbtLimits = None, member: str = '') -> Schematic:
-    """解析磁盘上的建筑文件（自动识别格式与压缩）。"""
+def parse_file(path: str, limits: NbtLimits = None, member: str = '',
+               cmd_convert: str = 'be2java') -> Schematic:
+    """解析磁盘上的建筑文件（自动识别格式与压缩）。
+
+    `cmd_convert` **只对 .bdx 有意义**（BDX 命令方块里存的是基岩版命令语法）：
+      · 'be2java'（默认）基岩版 → Java 版
+      · 'java2be' Java 版 → 基岩版
+      · 'none'    不转换，原样保留
+    """
     limits = limits or NbtLimits()
     if not os.path.isfile(path):
         raise FormatError('文件不存在')
     ext = os.path.splitext(path)[1].lower()
     if ext in ARCHIVE_EXTS:
-        return parse_zip(path, limits, member=member)
+        return parse_zip(path, limits, member=member, cmd_convert=cmd_convert)
     if ext == '.bdx':
         # BDX 是网易中国版的「操作码流」格式：'BD@' + brotli 压缩，
         # 与 NBT 系格式完全不同，所以在这里分流，不走 parse_nbt_bytes。
         from . import bdx as _bdx
         try:
-            return _bdx.parse_bdx(path, limits, source=path)
+            return _bdx.parse_bdx(path, limits, source=path, cmd_convert=cmd_convert)
         except _bdx.BdxError as e:
             raise FormatError('BDX 解析失败：%s' % e)
     if ext == '.mcstructure':
@@ -856,7 +863,8 @@ def list_zip(path: str) -> list:
     return out
 
 
-def parse_zip(path: str, limits: NbtLimits = None, member: str = '') -> Schematic:
+def parse_zip(path: str, limits: NbtLimits = None, member: str = '',
+              cmd_convert: str = 'be2java') -> Schematic:
     """解析 zip：member 为空则取第一个可解析的建筑；否则按成员名解析。"""
     limits = limits or NbtLimits()
     try:
@@ -882,6 +890,16 @@ def parse_zip(path: str, limits: NbtLimits = None, member: str = '') -> Schemati
                               f'（支持 {"、".join(SUPPORTED_EXTS)}）')
         info, safe = chosen
         raw = read_zip_member(zf, info, MAX_ZIP_MEMBER_BYTES)
+    # zip 成员是 .bdx 时也走 BDX 解析（含命令转换方向）
+    if os.path.splitext(safe)[1].lower() == '.bdx':
+        from . import bdx as _bdx
+        try:
+            sch = _bdx.parse_bytes(raw, limits, source=safe, cmd_convert=cmd_convert)
+        except _bdx.BdxError as e:
+            raise FormatError('BDX 解析失败：%s' % e)
+        sch.source = f'{os.path.basename(path)}::{info.filename}'
+        sch.warnings.insert(0, f'来自压缩包成员：{info.filename}')
+        return sch
     sch = parse_nbt_bytes(raw, safe, limits)
     sch.source = f'{os.path.basename(path)}::{info.filename}'
     sch.warnings.insert(0, f'来自压缩包成员：{info.filename}')
