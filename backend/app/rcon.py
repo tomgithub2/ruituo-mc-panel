@@ -315,6 +315,9 @@ def try_commands(host: str, port: int, password: str, cmds, timeout: float = 5.0
 # ---------------------------------------------------------------- TPS 采集
 _tps_cache = {}
 _tps_lock = threading.RLock()
+#: 实例 id → 最近一次「有人请求 TPS」的时间。
+#: 采样器据此决定要不要主动开 RCON 连接（没有观察者就不采，见 tps_recently_watched）。
+_tps_watched = {}
 
 
 def _rcon_creds(row: dict, cfg: dict) -> tuple:
@@ -395,6 +398,32 @@ def _flight_lock(iid):
         if lk is None:
             lk = _flight_locks[iid] = threading.Lock()
         return lk
+
+
+def mark_tps_watched(row: dict) -> None:
+    """登记「刚刚有人真的在取这个实例的 TPS」。
+
+    用途见 `tps_recently_watched()`：采样器靠它判断**该不该主动去 RCON 取 TPS**。
+    设计动机（用户实测反馈）：面板会**每 25~30 秒**开一次 RCON 连接，服务端控制台
+    被 `Thread RCON Client ... started / shutting down` 一直刷 —— 哪怕服务器**根本没人在看、
+    没人在线**。TPS 是慢变量，没有观察者时完全没有采集的必要，
+    所以改成「**有人看才采**」，空闲时 RCON 完全静默。
+    """
+    iid = (row or {}).get('id')
+    if iid is None:
+        return
+    with _tps_lock:
+        _tps_watched[iid] = time.time()
+
+
+def tps_recently_watched(row: dict, window: float = 90.0) -> bool:
+    """最近 `window` 秒内有没有人请求过该实例的 TPS。"""
+    iid = (row or {}).get('id')
+    if iid is None:
+        return False
+    with _tps_lock:
+        t = _tps_watched.get(iid) or 0.0
+    return (time.time() - t) < window
 
 
 def collect_tps(row: dict, cfg: dict = None, log_lines=None, ttl: float = 5.0,

@@ -136,7 +136,7 @@ def instance_tps(iid: int, refresh: int = Query(default=0),
         rcon_mod.clear_tps_cache(iid)
     # TTL 25 秒：这个接口是前端手点/定时刷新用的，5 秒缓存会让频繁刷新
     # 直接踩穿缓存、每次新开一条 RCON 连接（服务端控制台刷屏）。
-    out = rcon_mod.collect_tps(row, log_lines=_instance_log_lines(row), ttl=25.0)
+    out = rcon_mod.collect_tps(row, log_lines=_instance_log_lines(row), ttl=300.0)
     st = manager.status(iid)
     out['instance'] = row.get('name')
     out['instance_id'] = iid

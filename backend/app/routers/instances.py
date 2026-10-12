@@ -122,7 +122,7 @@ def _decorate(row: dict) -> dict:
             # 用默认的 5 秒会让前端把缓存直接踩穿，每次轮询都新开一条 RCON 连接，
             # 服务端控制台就被 `Thread RCON Client ... started / shutting down` 刷屏。
             # 采样器那边仍用短 TTL（它要写进指标表，需要新鲜值）。
-            t = collect_tps(row, ttl=30.0)
+            t = collect_tps(row, ttl=300.0)
             if t.get('available'):
                 # 契约是数字（前端 Number(it.tps)），必须归一成标量，否则显示 NaN
                 out['tps'] = tps_scalar(t.get('tps'))
@@ -224,7 +224,7 @@ def status(iid: int, user: dict = Depends(get_current_user)):
             #    `Thread RCON Client ... started / shutting down` 刷屏（用户实测反馈）。
             #    ※ 踩过的坑：同一文件里有两处 collect_tps 调用（另一处在 `_decorate`
             #      L125 也已是 ttl=30.0），我第一次只改了一处，于是问题照旧。
-            t = collect_tps(row, ttl=30.0)
+            t = collect_tps(row, ttl=300.0)
             if t.get('available'):
                 # ⚠️ 前端用的是 `Number(st.tps).toFixed(1)` —— **契约是数字**。
                 #    这里必须归一成标量；直接塞 dict 会渲染成 `NaN`

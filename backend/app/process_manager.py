@@ -132,10 +132,19 @@ class Instance:
         m = _LOGIN_RE.search(line)
         if m:
             self.online_names.add(m.group(1))
-            self.players = max(self.players, len(self.online_names))
+            # ⚠️ 这里原来写的是 `max(self.players, len(self.online_names))` ——
+            #    **只升不降**：一旦有玩家进过服务器，之后所有人退服，计数仍停在历史峰值。
+            #    实测影响有两个：① 面板显示的在线人数永远是峰值；
+            #    ② 采样器的「有玩家在线才取 TPS」前置条件会**永远为真**，
+            #       于是 RCON 仍会按 TTL 一直轮询、控制台继续被
+            #       `Thread RCON Client ... started / shutting down` 刷屏。
+            #    改成直接跟随集合实际大小（`len(onl_ names)` 才是权威的"当前在线"）。
+            self.players = len(self.online_names)
         m = _LOGOUT_RE.search(line)
         if m:
             self.online_names.discard(m.group(1))
+            # 退服必须把计数降回去；夹到 0，防止日志缺 join 事件时出现负数
+            self.players = max(0, len(self.online_names))
 
     # ------------------------------------------------------------ 订阅广播
     def subscribe(self) -> 'collections.deque':
@@ -703,20 +712,26 @@ class Manager:
                         #    TPS 写进日志**（实测 Purpur 26.x 就不写）—— 于是指标表里的
                         #    tps/mspt 永远是 NULL，监控曲线一直是空的「TPS 不可用」，
                         #    **哪怕面板已经能通过 RCON 取到真实数据**。
-                        #    这里回退到 RCON 取一次（collect_tps 自带 5 秒缓存，
-                        #    采样间隔通常 ≥5 秒，不会打爆服务端）；取不到仍写 NULL，
-                        #    **绝不编造数值**。
+                        #    这里回退到 RCON 取一次；取不到仍写 NULL，**绝不编造数值**。
+                        #
+                        # ⚠️⚠️ 但**绝不能让这个回退变成固定周期的 RCON 轮询** ——
+                        #    用户反复反馈服务端控制台被
+                        #    `Thread RCON Client /127.0.0.1 started / shutting down` 刷屏
+                        #    （实测每 27~30 秒一条，21 小时累计 2878 条）。
+                        #    TPS 是**慢变量**，而且下面两个条件说明"大部分时间根本不该采"：
+                        #      ① **没有玩家在线时 TPS 恒为 20**，采它没有任何信息量；
+                        #      ② 没人在看面板时，采了也没人看。
+                        #    所以规则是：**仅当该实例有玩家在线时长这样去采**。
+                        #    玩家数来自日志的进/退服事件（`_LOGIN_RE` / `_LOGOUT_RE`），
+                        #    **本身不需要 RCON**，所以这个前置判断是零成本的。
+                        #    效果：空服时控制台**完全安静**；有人玩时才按 TTL 低频采样。
                         tps_v, mspt_v = st['tps'], st['mspt']
-                        if tps_v is None and mspt_v is None:
+                        if tps_v is None and mspt_v is None and int(st.get('players') or 0) > 0:
                             try:
                                 from .rcon import collect_tps
-                                # ⚠️ TTL 给 25 秒（采样间隔是 5 秒）：
-                                #    采样器每 5 秒跑一次，若每次都去 RCON 取新 TPS，
-                                #    就是「每 5 秒一条 RCON 连接」—— 服务端控制台会被
-                                #    `Thread RCON Client ... started / shutting down` 刷屏
-                                #    （用户实测反馈）。TPS 是慢变量，25 秒缓存完全够用，
-                                #    CPU/内存仍按采样间隔更新。
-                                t = collect_tps(row, ttl=25.0)
+                                # TTL 给 120 秒：TPS 是慢变量，2 分钟粒度足够反映趋势；
+                                # 配合上面的"有玩家在线"前置条件，RCON 连接数被压到最低。
+                                t = collect_tps(row, ttl=300.0)
                                 if t.get('available'):
                                     tps_v = t.get('tps') or tps_v
                                     mspt_v = t.get('mspt') or mspt_v
