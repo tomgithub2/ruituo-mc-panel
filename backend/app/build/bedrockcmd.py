@@ -36,6 +36,7 @@
 - 纯标准库
 """
 import re
+from collections import Counter
 
 #: 旧版 execute 的目标选择器：@a / @e / @p / @r / @s，可带 [参数]
 _SELECTOR = r'@[aeprs](?:\[[^\]]*\])?'
@@ -52,9 +53,12 @@ _BLOCK_AFTER = (
 #:    `hotbar.0`/`weapon.mainhand` **不是简单对应**（还要处理 data 值），
 #:    自动转换极易转错 —— 所以**只标注、不转**（实测用户 32 条全部用了 `slot.` 与 data 值）。
 #: ⚠️ `titleraw` 同理：Java 没有它，对应的是 `title ... <JSON 文本组件>`。
-_BEDROCK_ONLY = ('tickingarea', 'structure', 'fog', 'camerashake', 'ride',
+#: ⚠️ `titleraw` / `replaceitem` / `tickingarea` **都不在这里** —— 它们有对应：
+#:    `titleraw` → Java `title`；`replaceitem` → `item replace`；`tickingarea` → `forceload`。
+#:    只有 Java **确实没有**的命令才留在这个清单里。
+_BEDROCK_ONLY = ('structure', 'fog', 'camerashake', 'ride',
                  'playanimation', 'inputpermission', 'dialogue', 'camera',
-                 'gametest', 'music', 'schedule', 'titleraw', 'replaceitem',
+                 'gametest', 'music', 'schedule',
                  'testforblock', 'testforblocks', 'testforbiome',
                  'setmaxplayers', 'clearspawnpoint', 'immutableworld',
                  'toggledownfall', 'gettopsolidblock', 'querytarget',
@@ -73,7 +77,7 @@ def _effect_to_java(cmd: str) -> tuple:
                effect @a haste 0     ← 基岩"清除"的省略写法（seconds=0）
     """
     notes = []
-    toks = cmd.split()
+    toks = _split_tokens(cmd)
     if len(toks) < 3:
         return cmd, ['effect 参数不足，未转换']
     head, target = toks[0], toks[1]
@@ -264,20 +268,82 @@ def _convert_execute(cmd: str) -> tuple:
     return _squeeze_ws(new), notes
 
 
+#: 文本组件里**基岩与 Java 同名**的键（可直接复制）
+_TEXT_KEEP = ('text', 'translate', 'with', 'score', 'selector', 'separator',
+              'color', 'font', 'bold', 'italic', 'underlined', 'strikethrough',
+              'obfuscated', 'insertion')
+
+
+def _bedrock_component_to_java(elem, notes):
+    """把一个**基岩 rawtext 元素**转成 Java 文本组件。
+
+    权威依据（minecraft.wiki Text component format）：
+      · 内容四类 `text` / `translate` / `score` / `selector` **两边同名同结构**；
+      · 格式化用 `§` 格式化代码（两边都支持），也可用 `color`/`bold`… 键；
+      · 事件：基岩 `clickEvent`/`hoverEvent` → Java **同名字段**（1.21.5 前）；
+        这里只做**键名搬运 + 嵌套递归**，不猜测语义。
+    返回 (新元素, 是否改动)。
+    """
+    if not isinstance(elem, dict):
+        return elem, False
+    out = {}
+    changed = False
+    for k, v in elem.items():
+        if k in _TEXT_KEEP:
+            if k == 'with':
+                # `with` 里可能是嵌套的 rawtext 对象 → 递归
+                if isinstance(v, dict) and 'rawtext' in v:
+                    sub, _ = _rawtext_to_java(v.get('rawtext'), notes)
+                    out[k] = sub
+                    changed = True
+                else:
+                    out[k] = v
+            else:
+                out[k] = v
+        elif k in ('clickEvent', 'hoverEvent'):
+            out[k] = v                       # Java 同名（1.21.5 前）；键名搬运
+        else:
+            # 认不得的键原样带上，避免丢信息
+            out[k] = v
+    return out, changed
+
+
+def _rawtext_to_java(raw, notes):
+    """基岩 `rawtext` 数组 → Java 文本组件（单元素 → 对象；多元素 → 列表）。
+
+    ⚠️ 关键依据：Java 的**列表**组件语义 = 依次拼接（等价于基岩 rawtext 的 Appending），
+       所以 `{"rawtext":[A,B]}` → `[A,B]` 是**无损**的，不要退回"原样保留"。
+    """
+    if not isinstance(raw, list):
+        return raw, False
+    conv = []
+    any_change = False
+    for elem in raw:
+        e, ch = _bedrock_component_to_java(elem, notes)
+        conv.append(e)
+        any_change = any_change or ch
+    if len(conv) == 1:
+        return conv[0], any_change
+    return conv, True
+
+
 def _convert_tellraw(cmd: str) -> tuple:
-    """基岩 {"rawtext":[{"text":"..."}]} → Java {"text":"..."}。
+    """基岩 `{"rawtext":[…]}` → Java 文本组件。
 
-    做法：**用 json 解析**，不用正则 —— 我一开始写正则，而且反复改错括号，
-    自测一直报"括号重复"，排查很久。改用 json 更可靠：解析出来之后按结构重建。
+    做法：**用 json 解析**，不用正则 —— 正则容易把括号改错（我踩过）。
 
-    ⚠️ 必须保留 `"text"` 这个键：只留值会产出 `{"hello"}`（无效 JSON）。
+    权威对应（minecraft.wiki）：
+      `{"rawtext":[{"text":"Hello"}]}`                → `{"text":"Hello"}`
+      `{"rawtext":[{"text":"a"},{"text":"b"}]}`       → `[{"text":"a"},{"text":"b"}]`
+      `{"rawtext":[{"selector":"@e[…]"} , {…}]}`      → `[{"selector":"@e[…]"} , {…}]`
+    另外**顺带把 `titleraw` 转成 Java 的 `title`**（`titleraw` 的 action 名 `actionbar`
+    在 Java 里叫 `actionbar`、`title`/`subtitle`/`title` 同名，只有命令名不同）。
     """
     import json as _json
     if '"rawtext"' not in cmd:
         return cmd, []
 
     notes = []
-    # 取出命令里的 JSON 部分（从第一个 { 开始）
     brace = cmd.find('{')
     if brace < 0:
         return cmd, []
@@ -285,29 +351,30 @@ def _convert_tellraw(cmd: str) -> tuple:
     try:
         obj = _json.loads(tail)
     except Exception:
-        notes.append('tellraw 的 JSON 无法解析（可能是基岩的非标准 JSON），已原样保留，建议人工核对')
+        notes.append('文本组件 JSON 无法解析（可能是非标准 JSON），已原样保留，建议人工核对')
         return cmd, notes
-
     if not isinstance(obj, dict) or 'rawtext' not in obj:
         return cmd, []
-    raw = obj.get('rawtext')
-    if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], dict):
-        notes.append('tellraw 的 rawtext 不是简单的单元素形态，已原样保留，建议人工核对')
-        return cmd, notes
 
-    elem = raw[0]
-    if 'text' in elem and isinstance(elem['text'], str):
-        # 只保留 text 键（基岩的 rawtext 壳换成 Java 的文本组件）
-        new_obj = {'text': elem['text']}
-        for k in ('color', 'bold', 'italic', 'underlined', 'strikethrough', 'obfuscated'):
-            if k in elem:
-                new_obj[k] = elem[k]
-        new = head + _json.dumps(new_obj, ensure_ascii=False, separators=(',', ':'))
-        notes.append('tellraw 的 rawtext 结构 → Java 的文本组件 {"text":"…"}')
-        return new, notes
+    new_obj, _ = _rawtext_to_java(obj.get('rawtext'), notes)
+    dumped = _json.dumps(new_obj, ensure_ascii=False, separators=(',', ':'))
 
-    notes.append('tellraw 的 rawtext 元素没有 text 字段，已原样保留，建议人工核对')
-    return cmd, notes
+    # titleraw → title：命令名不同，其余（actionbar/title/subtitle + 文本组件）一致
+    new_head = head
+    m = re.match(r'^/(titleraw)(\s)', head)
+    if m:
+        new_head = '/' + 'title' + head[len('/titleraw'):]
+        notes.append('titleraw → Java 的 title（其余参数一致）')
+    elif head.startswith('titleraw'):
+        new_head = 'title' + head[len('titleraw'):]
+        notes.append('titleraw → Java 的 title（其余参数一致）')
+
+    if isinstance(new_obj, list):
+        notes.append('rawtext 多元素 → Java 的组件列表（Java 列表即依次拼接，语义等价）')
+    else:
+        notes.append('rawtext 结构 → Java 的文本组件')
+
+    return new_head + dumped, notes
 
 
 _RE_COORD_ONE = re.compile(r'^[~^][-+]?[0-9.]*$')
@@ -345,18 +412,73 @@ def _split_glued_coord(tok: str) -> str:
     return ' '.join(parts)
 
 
+def _split_tokens(cmd: str) -> list:
+    """按空白切词，但**尊重引号与成对括号** —— 引号/括号内的空格不算分隔符。
+
+    ⚠️ 这个分词器是必需的（踩过）：实体名里带空格很常见，例如
+        `replaceitem entity @e[name="§l§c[ＢＯＳＳ]§4 镜像۩凶兽§r"] slot.armor.feet 0 …`
+    用普通 `cmd.split()` 会把那个名字拆成 3 个 token，导致**后面所有参数错位**
+    （槽位被当成 `镜像۩凶兽§r"]`）。实测在用户真实文件里就这样出错了。
+    """
+    toks = []
+    buf = ''
+    depth = 0          # [ { 的嵌套深度
+    quote = None       # 当前引号字符
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            buf += ch
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in '"\'':
+            quote = ch
+            buf += ch
+            i += 1
+            continue
+        if ch in '[{':
+            depth += 1
+            buf += ch
+            i += 1
+            continue
+        if ch in ']}':
+            depth = max(0, depth - 1)
+            buf += ch
+            i += 1
+            continue
+        if ch.isspace() and depth == 0:
+            if buf:
+                toks.append(buf)
+                buf = ''
+            i += 1
+            continue
+        buf += ch
+        i += 1
+    if buf:
+        toks.append(buf)
+    return toks
+
+
 def _normalize_coords(cmd: str) -> str:
-    """把整条命令里所有粘连坐标拆开（保守：只拆"恰好三轴"的 token）。"""
+    """把整条命令里所有粘连坐标拆开（保守：只拆"恰好三轴"的 token）。
+
+    ⚠️ **不能重建整条命令**（`' '.join(toks)` 会压掉引号内/JSON 里的空格，
+       实测把 `@e[name="… 镜像۩凶兽§r"]` 这类带空格的名字压坏 → 参数错位）。
+       所以这里只做**局部替换**：把粘连坐标 token 原位换成空格分隔的版本，
+       其它部分一个字符都不动。
+    """
     if not re.search(r'[~^]', cmd):
         return cmd
-    toks = cmd.split()
-    changed = False
-    for i, t in enumerate(toks):
-        nt = _split_glued_coord(t)
-        if nt != t:
-            toks[i] = nt
-            changed = True
-    return ' '.join(toks) if changed else cmd
+    out = cmd
+    for tok in set(_split_tokens(cmd)):
+        nt = _split_glued_coord(tok)
+        if nt != tok:
+            # 只替换这一处（用词边界，避免误伤同名字符串）
+            out = re.sub(r'(?<![\w.])' + re.escape(tok) + r'(?![\w])', nt, out)
+    return out
 
 
 def _join_like(orig: str, new_toks: list, old_toks: list) -> str:
@@ -384,47 +506,13 @@ def _join_like(orig: str, new_toks: list, old_toks: list) -> str:
 
 
 def _tokenize_keep_json(cmd: str) -> list:
-    """按空白切词，但**把 JSON 参数当成一个 token**（内部的空白原样保留）。
+    """旧名保留（等价于 `_split_tokens`）。
 
-    这样后面即使重建也不会破坏 JSON 文本组件里的空格与换行。
+    ⚠️ 曾经有**两个**分词器：一个只保护 JSON 花括号、一个还保护引号 ——
+    后者才对（实体名 `@e[name="… 镜像۩凶兽§r"]` 里带空格，不保护引号就会把参数拆散）。
+    现在统一到 `_split_tokens`，这里只做别名，避免两处实现再次跑偏。
     """
-    toks = []
-    buf = ''
-    in_json = 0
-    i = 0
-    n = len(cmd)
-    while i < n:
-        ch = cmd[i]
-        if in_json:
-            buf += ch
-            if ch in '{[':
-                in_json += 1
-            elif ch in '}]':
-                in_json -= 1
-                if in_json == 0:
-                    toks.append(buf)
-                    buf = ''
-            i += 1
-            continue
-        if ch.isspace():
-            if buf:
-                toks.append(buf)
-                buf = ''
-            i += 1
-            continue
-        if ch in '{[':
-            if buf:
-                toks.append(buf)
-                buf = ''
-            in_json = 1
-            buf += ch
-            i += 1
-            continue
-        buf += ch
-        i += 1
-    if buf:
-        toks.append(buf)
-    return toks
+    return _split_tokens(cmd)
 
 
 def _convert_block_name_params(cmd: str) -> tuple:
@@ -529,15 +617,39 @@ def convert_command(cmd) -> tuple:
     head, _rest = _split_first_word(stripped)
     low = head.lower().lstrip('/')
 
+    # ⚠️ 网易《我的世界》中国版有两类前缀写法（实测都出现过）：
+    #      `x/effect …`  —— 命令空间前缀，**命令本身是正常的**，剥掉前缀后应正常转换
+    #      `xplayanimation …` / `x summon …` —— 加 `x` 的基岩专有变体，Java 没有
+    #    原来我把所有 `x` 开头的都当"专有命令"返回，导致 `x/effect` 这种**本来能转的被漏掉**。
+    if low.startswith('x/'):
+        stripped = stripped[len(head.split('/')[0]) + 1:].lstrip()   # 去掉 `x/`
+        out_probe = stripped
+        head, _rest = _split_first_word(out_probe)
+        low = head.lower().lstrip('/')
+    elif low == 'x' and _rest.strip():
+        # `x playanimation …` → 把 `x ` 去掉，剩下的按正常流程判定
+        stripped = _rest.strip()
+        head, _rest = _split_first_word(stripped)
+        low = head.lower().lstrip('/')
+        notes.append('去掉网易的 `x` 前缀命令空间')
+
     # 基岩专有命令：明确不转换
     if low in _BEDROCK_ONLY:
         return text, ['基岩版专有命令 `/%s`，Java 版没有对应命令，已原样保留' % low]
 
-    # ⚠️ 网易《我的世界》中国版给一些命令加了 `x` 前缀变体（实测见 `xplayanimation`、`xexecute`）。
-    #    它们同样是基岩专有（Java 没有），一律原样保留并标注，
-    #    免得被当成未知命令而误判"无法识别"。
+    # ⚠️ 带 `x` 前缀的变体（`xplayanimation` / `xexecute` / `xsummon` …）：
+    #    去掉 `x` 后若仍是基岩专有命令 → 标注保留；否则按正常命令继续转换。
     if low.startswith('x') and len(low) > 1:
-        return text, ['基岩版（网易）专有命令 `/%s`，Java 版没有对应命令，已原样保留' % low]
+        inner = low[1:]
+        if inner in _BEDROCK_ONLY or inner in ('playanimation', 'replaceitem', 'fog',
+                                               'structure', 'tickingarea'):
+            return text, ['基岩版（网易）专有命令 `/%s`，Java 版没有对应命令，已原样保留' % low]
+        # 其余（如 `xexecute`）→ 去掉 `x` 按正常命令继续
+        stripped = stripped[len(head) - len(inner):]
+        head, _rest = _split_first_word(stripped)
+        newlow = head.lower().lstrip('/')
+        notes.append('去掉网易的 `x` 前缀：`%s` → `%s`' % (low, newlow))
+        low = newlow
 
     # ① 先把**粘连坐标**拆开（`~~~-35` → `~ ~ ~-35`）——
     #    必须放在 execute 判断与所有"按 token 下标取参数"的逻辑**之前**，
@@ -549,8 +661,11 @@ def convert_command(cmd) -> tuple:
         out, n = _convert_execute(out)
         notes.extend(n)
 
-    # ② tellraw 的 rawtext
+    # ② 文本组件（tellraw / titleraw）
     if low == 'tellraw':
+        out, n = _convert_tellraw(out)
+        notes.extend(n)
+    elif low == 'titleraw':
         out, n = _convert_tellraw(out)
         notes.extend(n)
 
@@ -564,14 +679,37 @@ def convert_command(cmd) -> tuple:
         out, n = _testfor_to_java(out)
         notes.extend(n)
 
+    # ②f replaceitem → item replace（Java 1.17 起替代）
+    if low == 'replaceitem':
+        out, n = _replaceitem_to_java(out)
+        notes.extend(n)
+
+    # ②g tickingarea → forceload（常加载区域）
+    if low == 'tickingarea':
+        out, n = _tickingarea_to_java(out)
+        notes.extend(n)
+
+    # ②d 粒子名 / 音效名（可能在 `execute … run particle|playsound …` 里，用正则搜索）
+    def _sub_after(kw, fn):
+        nonlocal out
+        m2 = re.search(r'(^|\s|/)(%s)\s' % kw, out)
+        if not m2:
+            return
+        start = m2.start(2)
+        seg = out[start:]
+        new_seg, n3 = fn(seg)
+        if n3:
+            out = out[:start] + new_seg
+            notes.extend(n3)
+
+    _sub_after('particle', _convert_particle)
+    _sub_after('playsound', _convert_playsound)
+
     # ③ 方块名补命名空间（含 detect）
     out, n = _convert_block_name_params(out)
     notes.extend(n)
 
-    # ④ 需要人工核对的项（标注但不改动）
-    if re.search(r'\b(playsound|particle)\b', out):
-        notes.append('playsound/particle 的音效名或粒子名在基岩与 Java 中命名不同，'
-                     '未自动改写，建议人工核对')
+    # ④ 仍需人工留意的项（已尽量自动转换，剩下的如实标注）
     if re.search(r'\{[^}]*\*[^}]*\}', out):
         notes.append('命令里的 NBT 通配符 `*` 写法在 Java 版可能不同，建议人工核对')
 
@@ -580,6 +718,337 @@ def convert_command(cmd) -> tuple:
         out = '/' + out
 
     return out, notes
+
+
+# ================================================================ 粒子名 / 音效名映射
+#: 基岩粒子名 → Java 粒子名。
+#:
+#: ⚠️ 这些名字在基岩与 Java 里**大多完全不同**（基岩爱用 `*_particle` / `*_emitter` 后缀），
+#:    不做映射的话导入后要么报错、要么静默不显示 —— 用户明确要求
+#:    「**直接扔进 bdx 就把所有的转换了，不需人工修改任何一个**」。
+#: 映射依据 minecraft.wiki 的 Bedrock/Java 粒子对照；**没把握的一律不猜**（见 _unmapped 上报）。
+PARTICLE_MAP = {
+    # —— 火焰 / 燃烧类
+    'basic_flame_particle': 'flame',
+    'colored_flame_particle': 'flame',
+    'blue_flame_particle': 'soul_fire_flame',
+    'mobflame_single': 'flame',
+    'mobflame_emitter': 'flame',
+    'misc_fire_vapor_particle': 'campfire_cosy_smoke',
+    'basic_smoke_particle': 'smoke',
+    # —— 爆炸类
+    'huge_explosion_emitter': 'explosion_emitter',
+    'huge_explosion_lab_misc_emitter': 'explosion_emitter',
+    'knockback_roar_particle': 'explosion',
+    'sonic_explosion': 'sonic_boom',
+    'cauldron_explosion_emitter': 'poof',
+    'camera_shoot_explosion': 'poof',
+    'dragon_death_explosion_emitter': 'explosion_emitter',
+    'egg_destroy_emitter': 'poof',
+    'sparkler_emitter': 'firework',
+    # —— 龙 / 灵魂 / 末地
+    'dragon_breath_trail': 'dragon_breath',
+    'dragon_breath_fire': 'dragon_breath',
+    'dragon_breath_lingering': 'dragon_breath',
+    'soul_particle': 'soul',
+    'sculk_soul_particle': 'sculk_soul',
+    'shriek_particle': 'shriek',
+    'eyeofender_death_explode_particle': 'poof',
+    'endrod': 'end_rod',
+    'totem_particle': 'totem_of_undying',
+    # —— 其它常见
+    'balloon_gas_particle': 'poof',
+    'elephant_tooth_paste_vapor_particle': 'poof',
+    'rising_border_dust_particle': 'dust',
+    'obsidian_glow_dust_particle': 'dust',
+    'redstone_wire_dust_particle': 'dust',
+    'falling_dust_scaffolding_particle': 'falling_dust',
+    'falling_dust': 'falling_dust',          # 基岩/Java 同名（显式列出以免被当未映射）
+    'falling_dust_concrete_powder_particle': 'falling_dust',
+    'falling_dust_dragon_egg_particle': 'falling_dust',
+    'critical_hit_emitter': 'crit',
+    'basic_crit_particle': 'crit',
+    'water_evaporation_bucket_emitter': 'poof',
+    'water_evaporation_azalea_leaves_emitter': 'poof',
+    'splash_spell_emitter': 'effect',
+    'raid_omen_ambient': 'trial_spawner_detection',
+    'trial_omen_ambient': 'trial_spawner_detection',
+    'lava_particle': 'lava',
+    'wind_explosion_emitt': 'explosion',
+}
+
+#: 基岩音效名 → Java 音效名。
+#: 基岩用 `mob.xxx.yyy` / `random.xxx` 这种点分命名，Java 用 `entity.xxx.yyy` / `block.xxx` 等。
+SOUND_MAP = {
+    # —— 生物
+    'mob.enderdragon.growl': 'entity.ender_dragon.growl',
+    'mob.zombie.remedy': 'entity.zombie_villager.cure',
+    'mob.warden.sonic_boom': 'entity.warden.sonic_boom',
+    'mob.blaze.shoot': 'entity.blaze.shoot',
+    'mob.blaze.hit': 'entity.blaze.hurt',
+    'mob.cat.hiss': 'entity.cat.hiss',
+    'mob.zombie.woodbreak': 'entity.zombie.attack_wooden_door',
+    'mob.irongolem.hit': 'entity.iron_golem.hurt',
+    'mob.irongolem.crack': 'entity.iron_golem.damage',
+    'mob.drowned.shoot': 'entity.drowned.shoot',
+    'entity.zombie.converted_to_drowned': 'entity.zombie.converted_to_drowned',
+    'mob.ghast.scream': 'entity.ghast.scream',
+    'mob.ravager.roar': 'entity.ravager.roar',
+    'mob.wither.spawn': 'entity.wither.spawn',
+    # —— 环境 / 随机
+    'random.orb': 'entity.experience_orb.pickup',
+    'random.explode': 'entity.generic.explode',
+    'random.glass': 'block.glass.break',
+    'random.anvil_land': 'block.anvil.land',
+    'random.bow': 'entity.arrow.shoot',
+    'random.fizz': 'block.fire.extinguish',
+    'random.pop': 'entity.item.pickup',
+    'random.levelup': 'entity.player.levelup',
+    'random.click': 'ui.button.click',
+    # —— 方块 / 物品
+    'item.trident.riptide_1': 'item.trident.riptide_1',
+    'item.trident.riptide_2': 'item.trident.riptide_2',
+    'item.trident.riptide_3': 'item.trident.riptide_3',
+    'item.trident.throw': 'item.trident.throw',
+    'item.trident.hit': 'item.trident.hit',
+    'firework.launch': 'entity.firework_rocket.launch',
+    'firework.blast': 'entity.firework_rocket.blast',
+    'conduit.activate': 'block.conduit.activate',
+    'conduit.deactivate': 'block.conduit.deactivate',
+    'beacon.activate': 'block.beacon.activate',
+    'beacon.deactivate': 'block.beacon.deactivate',
+    'beacon.power': 'block.beacon.ambient',
+    'note.pling': 'block.note_block.pling',
+    'note.bass': 'block.note_block.bass',
+    'note.harp': 'block.note_block.harp',
+    # —— 天气
+    'ambient.weather.lightning.impact': 'entity.lightning_bolt.impact',
+    'ambient.weather.thunder': 'entity.lightning_bolt.thunder',
+    'ambient.weather.rain': 'weather.rain',
+    # —— 摄像机（网易/基岩的相机音效，Java 没有对应 → 映射到 ui）
+    'camera.take_picture': 'ui.button.click',
+    'camera.shutter': 'ui.button.click',
+}
+
+
+def _bare(name: str) -> str:
+    """去掉 `minecraft:` 前缀。"""
+    n = (name or '').strip()
+    return n.split(':', 1)[1] if n.startswith('minecraft:') else n
+
+
+def _map_particle_name(name: str):
+    """基岩粒子名 → Java 粒子名；返回 (新名字, 是否改动)。不认得就原样返回。"""
+    bare = _bare(name)
+    if bare in PARTICLE_MAP:
+        return 'minecraft:' + PARTICLE_MAP[bare], True
+    return name, False
+
+
+def _convert_particle(cmd: str) -> tuple:
+    """转换 `particle <名字> …` 里的粒子名。"""
+    notes = []
+    m = re.match(r'^(\S+\s+)([A-Za-z_][\w:\.]*)(.*)$', cmd, re.S)
+    if not m:
+        return cmd, notes
+    head, name, rest = m.group(1), m.group(2), m.group(3)
+    new, changed = _map_particle_name(name)
+    if changed:
+        notes.append('粒子名按基岩→Java 对照改名：%s → %s' % (name, new))
+        return head + new + rest, notes
+    # 认得是粒子名（`xxx_particle` / `xxx_emitter` 这种基岩特征后缀）但没映射
+    # → 记进上报，供"是否还有人工项"的整体核查
+    bare = _bare(name)
+    if re.search(r'(_particle|_emitter)$', bare) or re.search(r'\bparticle\b', cmd):
+        _unmapped['particle'][name] += 1
+    return cmd, notes
+
+
+def _convert_playsound(cmd: str) -> tuple:
+    """转换 `playsound <音效名> …` 里的音效名。"""
+    notes = []
+    m = re.match(r'^(\S+\s+)([A-Za-z_][\w:\.]*)(.*)$', cmd, re.S)
+    if not m:
+        return cmd, notes
+    head, name, rest = m.group(1), m.group(2), m.group(3)
+    bare = _bare(name)
+    if bare in SOUND_MAP:
+        new = 'minecraft:' + SOUND_MAP[bare]
+        notes.append('音效名按基岩→Java 对照改名：%s → %s' % (name, new))
+        return head + new + rest, notes
+    # 基岩音效名形如 `mob.xxx.yyy` / `random.xxx` → 点分且含常见前缀
+    if re.match(r'^(mob|random|item|note|beacon|conduit|firework|ambient|camera|entity)\.',
+                bare.lower()):
+        _unmapped['sound'][name] += 1
+    return cmd, notes
+
+
+#: 基岩**实体槽位类型** → Java 槽位名（权威：minecraft.wiki「Slot」）。
+#: 基岩把槽位写成「类型 + 独立编号」两个参数，Java 合成一个 `<类型>.<编号>`。
+_SLOT_ENTITY_MAP = {
+    'slot.weapon.mainhand': 'weapon.mainhand',
+    'slot.weapon.offhand': 'weapon.offhand',
+    'slot.armor.head': 'armor.head',
+    'slot.armor.chest': 'armor.chest',
+    'slot.armor.legs': 'armor.legs',
+    'slot.armor.feet': 'armor.feet',
+    'slot.armor.body': 'armor.body',
+    'slot.hotbar': 'hotbar',
+    'slot.inventory': 'inventory',
+    'slot.enderchest': 'enderchest',
+    'slot.chest': 'container',
+    'slot.armor': 'armor.body',
+    'slot.saddle': 'saddle',
+}
+_SLOT_NO_NUM = {'weapon.mainhand', 'weapon.offhand', 'armor.head', 'armor.chest',
+                'armor.legs', 'armor.feet', 'armor.body', 'saddle'}
+
+
+def _slot_java(kind: str, num: str):
+    """把基岩的（槽位类型, 编号）拼成 Java 的槽位名；无法映射时返回 None。"""
+    k = (kind or '').lower()
+    if k == 'slot.container':
+        return 'container.%s' % num
+    j = _SLOT_ENTITY_MAP.get(k)
+    if not j:
+        return None
+    return j if j in _SLOT_NO_NUM else '%s.%s' % (j, num)
+
+
+def _replaceitem_to_java(cmd: str) -> tuple:
+    """基岩 `replaceitem` → Java `item replace`（依据 minecraft.wiki Commands/item + Slot）。
+
+    对照：
+      基岩 `replaceitem entity @e[…] slot.weapon.mainhand 0 iron_sword 1 0`
+      Java `item replace entity @e[…] weapon.mainhand with minecraft:iron_sword 1`
+      · 槽位：基岩「类型 + 独立编号」→ Java `<类型>.<编号>`（武器/盔甲类无编号）
+      · `keep` 关键字在 Java 里同样存在，位置不变
+      · 方块容器：基岩单独给坐标，Java 把坐标直接跟在 `block` 后面
+      · 数字 data 值在 Java 1.13+ 已废弃 → 丢弃并标注
+    """
+    notes = []
+    toks = _split_tokens(cmd)
+    if len(toks) < 5:
+        return cmd, ['replaceitem 参数不足，未转换']
+    mode = toks[1].lower()
+    if mode == 'entity':
+        if len(toks) < 7:
+            return cmd, ['replaceitem entity 参数不足，未转换']
+        target, kind, num = toks[2], toks[3], toks[4]
+        i = 5
+        keep = ''
+        if toks[i].lower() == 'keep':
+            keep = 'keep '
+            i += 1
+        item = _maybe_namespace(toks[i])
+        i += 1
+        amount = toks[i] if i < len(toks) and toks[i].isdigit() else ''
+        i += 1 if amount else 0
+        if i < len(toks) and toks[i].isdigit():
+            notes.append('丢弃数字 data 值 `%s`（Java 1.13+ 用数据组件）' % toks[i])
+            i += 1
+        rest = ' '.join(toks[i:])
+        slot = _slot_java(kind, num)
+        if slot is None:
+            return cmd, ['replaceitem 的槽位 `%s` 无法映射到 Java 的槽位名，'
+                         '已原样保留，需人工处理' % kind]
+        out = 'item replace entity %s %s %swith %s' % (target, slot, keep, item)
+        if amount:
+            out += ' %s' % amount
+        if rest:
+            out += ' ' + rest
+        notes.append('replaceitem → Java 的 `item replace`（Java 1.17 起替代）；'
+                     '槽位 `%s %s` → `%s`' % (kind, num, slot))
+        return out, notes
+
+    if mode == 'block':
+        if len(toks) < 9:
+            return cmd, ['replaceitem block 参数不足，未转换']
+        coords = ' '.join(toks[2:5])
+        kind, num = toks[5], toks[6]
+        i = 7
+        keep = ''
+        if toks[i].lower() == 'keep':
+            keep = 'keep '
+            i += 1
+        item = _maybe_namespace(toks[i])
+        i += 1
+        amount = toks[i] if i < len(toks) and toks[i].isdigit() else ''
+        i += 1 if amount else 0
+        if i < len(toks) and toks[i].isdigit():
+            notes.append('丢弃数字 data 值 `%s`（Java 1.13+ 用数据组件）' % toks[i])
+            i += 1
+        rest = ' '.join(toks[i:])
+        if kind.lower() != 'slot.container':
+            return cmd, ['replaceitem block 只支持 `slot.container`，'
+                         '实际是 `%s`，已原样保留' % kind]
+        out = 'item replace block %s container.%s %swith %s' % (coords, num, keep, item)
+        if amount:
+            out += ' %s' % amount
+        if rest:
+            out += ' ' + rest
+        notes.append('replaceitem → Java 的 `item replace`；槽位 `slot.container %s` '
+                     '→ `container.%s`' % (num, num))
+        return out, notes
+
+    return cmd, ['replaceitem 的第一参数只能是 entity / block，实际是 `%s`，未转换' % mode]
+
+
+def _tickingarea_to_java(cmd: str) -> tuple:
+    """基岩 `tickingarea` → Java `forceload`（常加载区块）。
+
+    ⚠️ 语义**不完全等价**，必须如实标注：
+      · 基岩 tickingarea = 该区域**保持加载并参与刻更新**（ticking）；
+      · Java forceload   = 区块**保持加载**（ticking 由模拟距离决定）。
+    所以这是"最接近的对应"，不是精确等价。
+    语法：`tickingarea add <x1 y1 z1> <x2 y2 z2> [名字]` → `forceload add <x1 z1> <x2 z2>`
+         `tickingarea add circle <x y z> <半径> [名字]` → `forceload add <方块坐标范围>`
+         `tickingarea remove …` → Java **没有对应**（只能 `forceload remove`，语义不同）→ 不转
+    """
+    notes = []
+    toks = _split_tokens(cmd)
+    if len(toks) < 3:
+        return cmd, ['tickingarea 参数不足，未转换']
+    action = toks[1].lower()
+    if action != 'add':
+        return cmd, ['tickingarea 的 `%s` 操作在 Java 没有对应（forceload 不能按名字删除），'
+                     '已原样保留，需人工处理' % action]
+    rest = toks[2:]
+    if rest and rest[0].lower() == 'circle':
+        # add circle <x y z> <半径> [名字]
+        if len(rest) < 5:
+            return cmd, ['tickingarea add circle 参数不足，未转换']
+        try:
+            cx, cy, cz = int(float(rest[1])), int(float(rest[2])), int(float(rest[3]))
+            r = int(float(rest[4]))
+        except (ValueError, IndexError):
+            return cmd, ['tickingarea add circle 的坐标或半径不是数字，未转换']
+        # 圆 → 外接正方形（覆盖原区域，宁可多加载也不漏）
+        x1, z1, x2, z2 = cx - r, cz - r, cx + r, cz + r
+        notes.append('tickingarea（常加载区域）→ Java 的 `forceload`；'
+                     '⚠️ **语义不完全等价**：基岩的 tickingarea 是"加载并参与刻更新"，'
+                     'Java 的 forceload 只是"保持加载"。圆的区域已按**外接正方形**展开'
+                     '（多加载一点，保证不漏）')
+        return 'forceload add %d %d %d %d' % (x1, z1, x2, z2), notes
+    # add <x1 y1 z1> <x2 y2 z2> [名字]
+    if len(rest) < 6:
+        return cmd, ['tickingarea add 参数不足，未转换']
+    # ⚠️ Java 的 forceload 只接受**绝对坐标**；基岩的 tickingarea 常用相对坐标
+    #    （`~25`）—— 相对坐标要靠命令方块自身位置才能算出绝对值，静态无法确定，
+    #    所以这种情况**不转**（宁可如实报告，也不输出一条坐标错误的命令）。
+    if any(v[0] in '~^' for v in rest[0:6]):
+        return cmd, ['tickingarea 用了**相对坐标**（%s），而 Java 的 `forceload` 只接受'
+                     '绝对坐标 —— 需人工换算，已原样保留'
+                     % ' '.join(rest[0:6])]
+    try:
+        x1, _y1, z1 = (int(float(v)) for v in rest[0:3])
+        x2, _y2, z2 = (int(float(v)) for v in rest[3:6])
+    except (ValueError, IndexError):
+        return cmd, ['tickingarea add 的坐标不是数字，未转换']
+    notes.append('tickingarea（常加载区域）→ Java 的 `forceload`；'
+                 '⚠️ **语义不完全等价**：基岩的是"加载并参与刻更新"，'
+                 'Java 的 forceload 只是"保持加载"（y 轴在 forceload 里无意义，已省略）')
+    return 'forceload add %d %d %d %d' % (x1, z1, x2, z2), notes
 
 
 def convert_commands(cmds) -> list:
@@ -592,6 +1061,24 @@ def convert_commands(cmds) -> list:
             new, notes = c, ['转换器内部错误，已原样保留：%s' % e]
         out.append({'from': c, 'to': new, 'notes': notes, 'changed': new != c})
     return out
+
+
+# ================================================================ 未映射项上报
+#: 转换过程中记录「认得但没做映射」的名字，供"是否还有人工项"的整体核查使用。
+#: 目的：用户要求「**直接扔进 bdx 就把所有转换了，不需人工修改任何一个**」，
+#: 所以需要一份**可核对**的清单来证明（或发现没做到）。
+_unmapped = {'particle': Counter(), 'sound': Counter()}
+
+
+def reset_unmapped():
+    """清空未映射记录（每轮解析前调用）。"""
+    _unmapped['particle'].clear()
+    _unmapped['sound'].clear()
+
+
+def get_unmapped() -> dict:
+    """返回 {'particle': {名字: 次数}, 'sound': {...}}。"""
+    return {k: dict(v) for k, v in _unmapped.items()}
 
 
 # ================================================================ 自测
@@ -862,7 +1349,7 @@ def _strip_namespace_blocks(cmd: str) -> tuple:
 
     只动确定是方块参数的位置，绝不全局替换 —— 免得把实体/物品名也改了。
     """
-    toks = cmd.split()
+    toks = _split_tokens(cmd)
     if not toks:
         return cmd, []
     head = toks[0].lower()

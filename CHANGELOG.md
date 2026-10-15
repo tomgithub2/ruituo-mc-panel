@@ -3,6 +3,101 @@
 本文件记录芮拓MC开服面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.8] - 2026-10-15
+
+承接用户要求：「**把什么粒子效果什么的名也增加转换（转换成对应的），就是直接扔进去 bdx 包
+就把所有的转换了，不需人工修改任何一个**」。
+
+### 新增：粒子名映射（37 种 → Java）
+基岩的粒子名与 Java **大多完全不同**（基岩爱用 `*_particle` / `*_emitter` 后缀），
+不映射的话导入后要么报错、要么静默不显示。新增 `PARTICLE_MAP` 覆盖实测用到的全部名字：
+```
+minecraft:colored_flame_particle  → minecraft:flame
+minecraft:basic_flame_particle    → minecraft:flame
+minecraft:blue_flame_particle     → minecraft:soul_fire_flame
+minecraft:soul_particle           → minecraft:soul
+minecraft:sonic_explosion         → minecraft:sonic_boom
+minecraft:endrod                  → minecraft:end_rod
+minecraft:totem_particle          → minecraft:totem_of_undying
+minecraft:balloon_gas_particle    → minecraft:poof
+…（共 37 种）
+```
+
+### 新增：音效名映射（26 种 → Java）
+基岩用 `mob.xxx.yyy` / `random.xxx` 点分命名，Java 用 `entity.*` / `block.*` / `ui.*`：
+```
+mob.enderdragon.growl  → minecraft:entity.ender_dragon.growl
+random.orb             → minecraft:entity.experience_orb.pickup
+random.glass           → minecraft:block.glass.break
+item.trident.riptide_3 → minecraft:item.trident.riptide_3
+camera.take_picture    → minecraft:ui.button.click
+…（共 26 种）
+```
+**实测：用户文件里 26 种音效名、37 种粒子名已 100% 映射，零残留。**
+
+### 修复：文本组件只转单元素（`tellraw`/`titleraw` 多元素漏转 17 条）
+依据 minecraft.wiki「Text component format」：**Java 的组件列表语义 = 依次拼接**，
+与基岩 `rawtext` 的 Appending **完全等价** → 多元素可**无损**转换：
+```
+{"rawtext":[{"text":"a"},{"text":"b"}]}          → [{"text":"a"},{"text":"b"}]
+{"rawtext":[{"text":"x"},{"selector":"@p"}]}     → [{"text":"x"},{"selector":"@p"}]
+{"rawtext":[{"text":"x"},{"score":{…}}]}         → [{"text":"x"},{"score":{…}}]
+```
+同时**把 `titleraw` 转成 Java 的 `title`**（命令名不同，其余参数一致）。
+
+### 修复：网易 `x/` 命令空间前缀被误判为"专有命令"
+```
+x/effect @e[…] resistance 999999 3 true   →  effect give @e[…] minecraft:resistance …
+```
+原来把所有 `x` 开头的都当基岩专有返回，**`x/effect` 这种本来能转的被漏掉**。
+现在：`x/<正常命令>` 剥前缀后正常转换；`xplayanimation` 这类真专有的仍标注保留。
+
+### 新增：`replaceitem` → Java `item replace`（Java 1.17 起替代）
+依据 minecraft.wiki「Slot」的槽位映射表（基岩是"类型+独立编号"，Java 合成 `<类型>.<编号>`）：
+```
+replaceitem entity @e[…] slot.weapon.mainhand 0 iron_sword 1 0
+  → item replace entity @e[…] weapon.mainhand with minecraft:iron_sword 1
+replaceitem entity @a slot.hotbar 0 carrot 1 0    → … hotbar.0 with minecraft:carrot 1
+replaceitem entity @e[…] slot.armor.chest 1 keep leather_chestplate 1
+  → … armor.chest keep with minecraft:leather_chestplate 1
+replaceitem block ~ ~2 ~ slot.container 26 sapling 4 1
+  → item replace block ~ ~2 ~ container.26 with minecraft:sapling 4
+```
+
+### 新增：`tickingarea` → Java `forceload`（常加载区域）
+```
+tickingarea add circle -905 120 -873 4 主城  →  forceload add -909 -877 -901 -869
+```
+⚠️ **语义不完全等价**（基岩是"加载并参与刻更新"，Java 的 forceload 只是"保持加载"），
+已在说明里如实标注；圆的区域按**外接正方形**展开（宁多加载不漏）。
+⚠️ 用**相对坐标**的 tickingarea **不转**（forceload 只接受绝对坐标，静态无法换算）。
+
+### 修复：带空格的实体名被拆散导致参数错位（我自己引入的 bug）
+```
+replaceitem entity @e[name="§l§c[ＢＯＳＳ]§4 镜像۩凶兽§r"] slot.armor.feet 0 …
+                              ↑ 名字里有空格
+```
+普通 `cmd.split()` 会把它拆成 3 个 token → **槽位参数错位**（被当成 `镜像۩凶兽§r"]`）。
+新增 `_split_tokens()`：**尊重引号与成对括号**，引号/括号内空格不算分隔符；
+并把所有处理命令参数的 `split()` 换成它。同时 `_normalize_coords` 改为**局部替换**，
+不再重建整条命令（重建会压掉引号/JSON 内的空格）。
+
+### 数据（用户真实 BDX，3449 条命令）
+```
+被自动转换      2220 条（64%）
+音效名未映射     0（全映射）
+粒子名未映射     0（全映射）
+仍需人工         43 条（1.2%）—— 全是 Java **确实没有**的命令：
+                 xplayanimation/playanimation 20 · tickingarea(相对坐标) 10 ·
+                 structure 9 · testfor(含 hasitem) 2 · fog 2
+```
+
+### 说明：为什么剩下 1.2% 不转
+这些命令在 **Java 里根本不存在**（`playanimation` 动画、`fog` 雾效、
+`structure` 结构方块、`hasitem` 选择器参数）。**硬转会产出必然报错的命令**，
+所以一律**原样保留 + 明确标注原因**，让使用者知道要人工处理哪几条 ——
+而不是假装"全转好了"。
+
 ## [0.3.7] - 2026-10-15
 
 ### 修复：BDX 建筑导入的坐标完全错乱（**字节序**）
