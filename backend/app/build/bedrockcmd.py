@@ -35,6 +35,7 @@
 - **绝不抛异常**：任何输入（None / 空串 / 畸形）都要安全返回
 - 纯标准库
 """
+import json as _JSON
 import re
 from collections import Counter
 
@@ -327,6 +328,262 @@ def _rawtext_to_java(raw, notes):
     return conv, True
 
 
+# ================================================================ § 格式化代码 → Java 组件
+#: § 颜色码 → Java 组件的 `color` 字段名。
+#: 依据 minecraft.wiki「Formatting codes」：Java 的 16 个颜色码与 §  一一对应；
+#: 而 `§g`/`§h`/`§i`… 是**基岩独有**的材质色。
+_SECTION_COLOR = {
+    '0': 'black', '1': 'dark_blue', '2': 'dark_green', '3': 'dark_aqua',
+    '4': 'dark_red', '5': 'dark_purple', '6': 'gold', '7': 'gray',
+    '8': 'dark_gray', '9': 'blue', 'a': 'green', 'b': 'aqua',
+    'c': 'red', 'd': 'light_purple', 'e': 'yellow', 'f': 'white',
+}
+#: § 格式码 → Java 组件的样式字段。
+_SECTION_STYLE = {
+    'k': 'obfuscated', 'l': 'bold', 'm': 'strikethrough',
+    'n': 'underlined', 'o': 'italic',
+}
+#: 基岩独有的「材质色」→ 用 Java 里观感最接近的标准色近似（Java 没有这些名字）。
+#: 依据 wiki 的 Bedrock 色表取近似：minecoin_gold / material_quartz / iron / netherite /
+#: redstone / copper / gold / emerald / diamond / lapis / amethyst / resin。
+_SECTION_BEDROCK_APPROX = {
+    'g': 'gold',            # minecoin_gold #EFCE16
+    'h': 'white',           # material_quartz #D9CCB8
+    'i': 'gray',            # material_iron #A9B4B7
+    'j': 'dark_gray',       # material_netherite #8F727D
+    'm': 'red',             # ⚠️ 基岩这里是颜色码 material_redstone；
+                            #    Java 的 §m 是删除线 → 两边同名不同义，必须区分！
+    'p': 'gold',            # material_gold
+    'q': 'green',           # material_emerald
+    's': 'aqua',            # material_diamond
+    't': 'blue',            # material_lapis
+    'u': 'light_purple',    # material_amethyst
+    'v': 'gold',            # material_resin
+    'w': 'blue',            # party_blue
+}
+
+
+def _section_to_components(text: str) -> list:
+    """把带 `§` 代码的文本切成 Java 文本组件列表（`{"text":…}` + color/bold…）。
+
+    ⚠️ **为什么必须做**（2026-10-15 崩服事故）：
+    Java 的组件类命令参数（`/title` `/tellraw` `/scoreboard`）会被**严格解析**，
+    里面出现 `§` 会抛
+        Failed to encode Minecraft Component: … Disallowed chat character: '§'
+    而且这异常**不是"命令失败"，是让整个服务端崩掉**（Purpur 26.1.2 实测）。
+    参见 wiki「Formatting codes」：Java 里 § 只能用于游戏外文本。
+
+    ⚠️ **只在组件类命令上做** —— 实体名/物品名里的 `§`（`@e[name="§c…"]`）是
+    字符串参数、不参与组件解析，**必须原样保留**（否则会改坏选择器语义）。
+    """
+    import json as _json
+    if not text or '§' not in text:
+        return [{'text': text}]
+    out = []
+    cur_text = ''
+    cur_style = {}
+
+    def flush():
+        nonlocal cur_text
+        if cur_text:
+            c = {'text': cur_text}
+            c.update(cur_style)
+            out.append(c)
+            cur_text = ''
+
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '§' and i + 1 < n:
+            code = text[i + 1].lower()
+            if code == 'r':
+                flush()
+                cur_style = {}
+            elif code in _SECTION_COLOR:
+                flush()
+                cur_style = {'color': _SECTION_COLOR[code]}
+            elif code in _SECTION_STYLE:
+                flush()
+                cur_style = dict(cur_style)
+                cur_style[_SECTION_STYLE[code]] = True
+            elif code in _SECTION_BEDROCK_APPROX:
+                flush()
+                cur_style = {'color': _SECTION_BEDROCK_APPROX[code]}
+            else:
+                # 认不得的码：当成普通文本保留（不猜）
+                cur_text += ch + text[i + 1]
+            i += 2
+            continue
+        cur_text += ch
+        i += 1
+    flush()
+    if not out:
+        out = [{'text': ''}]
+    return out
+
+
+def _component_text_to_java(comp):
+    """递归：把组件（或其 JSON 字面量字符串）里的 `§` 代码转成 Java 组件字段。
+
+    · 字符串（组件 JSON 字面量）→ 解析后转换再序列化；
+    · dict / list → 递归处理里面的 `text` 字段。
+    返回 (新值, 是否改动)。
+    """
+    import json as _json
+    if isinstance(comp, str):
+        s = comp.strip()
+        if not s.startswith(('{', '[')):
+            return comp, False
+        try:
+            obj = _json.loads(s)
+        except Exception:
+            return comp, False
+        new, ch = _component_text_to_java(obj)
+        if not ch:
+            return comp, False
+        return _json.dumps(new, ensure_ascii=False, separators=(',', ':')), True
+    if isinstance(comp, list):
+        changed = False
+        outl = []
+        for e in comp:
+            e2, ch = _component_text_to_java(e)
+            outl.append(e2)
+            changed = changed or ch
+        return (outl, True) if changed else (comp, False)
+    if isinstance(comp, dict):
+        changed = False
+        outd = dict(comp)
+        # 先处理 rawtext 外壳（基岩形态）
+        if 'rawtext' in outd:
+            rt, ch = _component_text_to_java(outd['rawtext'])
+            if ch:
+                outd['rawtext'] = rt
+                changed = True
+        # ⚠️ 关键：`text` 字段里带 § 时，要**真正切成多个带颜色的子组件**，
+        #    而不是只递归（我第一版就漏在这：递归本身不会做 § → color 的转换）。
+        #    做法：把分段结果挂到 `extra`（Java 的兄弟组件），原组件其它键保留。
+        if 'text' in outd and isinstance(outd['text'], str) and '§' in outd['text']:
+            segs = _section_to_components(outd['text'])
+            first = dict(segs[0]) if segs else {'text': ''}
+            rest = segs[1:] if len(segs) > 1 else []
+            merged = dict(outd)
+            merged['text'] = first.get('text', '')
+            for k, v in first.items():
+                if k != 'text':
+                    merged[k] = v
+            old_extra = merged.get('extra')
+            if isinstance(old_extra, list):
+                rest = rest + old_extra
+            if rest:
+                merged['extra'] = rest
+            outd = merged
+            changed = True
+        for k in ('with', 'extra'):
+            if k in outd:
+                v2, ch = _component_text_to_java(outd[k])
+                if ch:
+                    outd[k] = v2
+                    changed = True
+        return (outd, True) if changed else (comp, False)
+    return comp, False
+
+
+def _extract_component_arg(cmd: str):
+    """从命令里取出【要当作组件解析的那个参数】的起止位置；取不到返回 None。
+
+    只覆盖 Java 里文本参数是**组件**的命令（这些会严格解析 → § 会崩服）：
+```
+/title    <目标> (title|subtitle|actionbar) <组件>      ← 第 3 个参数
+/tellraw  <目标> <组件>                                  ← 第 2 个参数
+/titleraw <目标> (title|subtitle|actionbar) <组件>       ← 第 3 个参数（转 title 后同）
+/scoreboard objectives modify <目标> displayname <组件>   ← 最后一个参数
+```
+    ⚠️ `/say` `/me` 等是**纯文本**参数，legacy 容忍 `§`，**不要动**。
+    """
+    toks = _split_tokens(cmd)
+    if not toks:
+        return None
+    # ⚠️ 用带位置的分词结果定位（**不要事后 find**，会命中同名子串 —— 实测踩过）
+    spans = _split_tokens_pos(cmd)
+    if len(spans) != len(toks):
+        return None                     # 两套分词不一致时不冒险
+    # 去掉可能的前导 `/`
+    head = toks[0].lstrip('/').lower()
+    # 命令可能在 `execute … run X` 后面
+    run_idx = None
+    for i, t in enumerate(toks):
+        if t.lower() == 'run':
+            run_idx = i
+    if run_idx is not None and run_idx + 1 < len(toks):
+        base = run_idx + 1
+        head = toks[base].lstrip('/').lower()
+    else:
+        base = 0
+
+    def span(idx):
+        if idx >= len(toks):
+            return None
+        a, b = spans[idx]
+        # ⚠️ 组件参数**可能带未加引号的空格**（`/title … title §e⚝ ▷ §b水上乐园`）——
+        #    按分词只拿到第一个词，替换后剩下的尾巴会变成非法命令（实测踩到）。
+        #    组件是**最后一个参数**，所以一路吃到命令末尾即可；
+        #    末尾的 `"`（引号收尾）和转义字符要剔除。
+        if '§' in cmd[a:] or b < len(cmd):
+            tail = cmd[a:]
+            if '§' in tail or tail.lstrip().startswith(('{', '[')):
+                bb = len(cmd.rstrip())
+                while bb > a and cmd[bb - 1] in '"\'':
+                    bb -= 1
+                return (a, bb)
+        return (a, b)
+
+    if head == 'title' and base + 3 < len(toks):
+        return span(base + 3)
+    if head in ('tellraw',) and base + 2 < len(toks):
+        return span(base + 2)
+    if head == 'titleraw' and base + 3 < len(toks):
+        return span(base + 3)
+    if head == 'scoreboard':
+        # objectives modify <目标> displayname <组件>
+        # toks: [scoreboard, objectives, modify, <目标>, displayname, <组件>]
+        if (base + 5 < len(toks) and toks[base + 1].lower() == 'objectives'
+                and toks[base + 4].lower() == 'displayname'):
+            return span(base + 5)
+        # players setdisplayname <目标> <组件>（值里也可能带 §）
+        if (base + 3 < len(toks) and toks[base + 1].lower() == 'players'
+                and toks[base + 2].lower() == 'setdisplayname'):
+            return span(len(toks) - 1)
+        return None
+    return None
+
+
+def _convert_section_codes(out: str) -> tuple:
+    """把组件类命令参数里的 `§` 代码转成 Java 组件。"""
+    notes = []
+    sp = _extract_component_arg(out)
+    if not sp:
+        return out, notes
+    a, b = sp
+    raw = out[a:b]
+    # 纯文本（不带 { [）→ 用 § 切成分段组件
+    if not raw.lstrip().startswith(('{', '[')):
+        comp = _section_to_components(raw)
+        if len(comp) == 1 and 'color' not in comp[0] and not any(
+                k in comp[0] for k in _SECTION_STYLE.values()):
+            return out, notes          # 没有真正的格式码，不动
+        new = out[:a] + _JSON.dumps(comp, ensure_ascii=False, separators=(',', ':')) + out[b:]
+        notes.append('§ 颜色代码 → Java 文本组件（Java 禁止 §，会崩服务端）')
+        return new, notes
+    # JSON 组件 → 递归处理里面的 text
+    new_raw, changed = _component_text_to_java(raw)
+    if not changed:
+        return out, notes
+    new = out[:a] + new_raw + out[b:]
+    notes.append('文本组件里的 § 颜色代码 → Java 的 color/bold 等字段（Java 禁止 §）')
+    return new, notes
+
+
 def _convert_tellraw(cmd: str) -> tuple:
     """基岩 `{"rawtext":[…]}` → Java 文本组件。
 
@@ -410,6 +667,61 @@ def _split_glued_coord(tok: str) -> str:
     if not all(_RE_COORD_ONE.match(x) for x in parts):
         return tok
     return ' '.join(parts)
+
+
+def _split_tokens_pos(cmd: str) -> list:
+    """按空白切词并**返回每个 token 的 (起, 止) 位置**，尊重引号与成对括号。
+
+    ⚠️ 为什么需要位置：要"只替换命令里的某一个参数"时，**不能事后用
+       `cmd.find(token)` 去猜位置** —— 会命中前面的同名子串。
+       实测踩到：`execute … scores={撤离=1..99} … run titleraw @s actionbar {"rawtext":…}`
+       里想找 `{` 开头的组件参数，`find('{')` 先命中了 `scores={…}` 的 `{`，
+       于是替换范围完全错位、`§` 一个都没换掉。
+       分词时顺手记下位置最可靠。
+
+    与 :func:`_split_tokens` 保持同一套规则（引号内、括号内的空白不算分隔符）。
+    """
+    spans = []
+    start = None
+    depth = 0
+    quote = None
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in '"\'':
+            quote = ch
+            if start is None:
+                start = i
+            i += 1
+            continue
+        if ch in '[{':
+            depth += 1
+            if start is None:
+                start = i
+            i += 1
+            continue
+        if ch in ']}':
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if ch.isspace() and depth == 0:
+            if start is not None:
+                spans.append((start, i))
+                start = None
+            i += 1
+            continue
+        if start is None:
+            start = i
+        i += 1
+    if start is not None:
+        spans.append((start, n))
+    return spans
 
 
 def _split_tokens(cmd: str) -> list:
@@ -668,6 +980,13 @@ def convert_command(cmd) -> tuple:
     elif low == 'titleraw':
         out, n = _convert_tellraw(out)
         notes.extend(n)
+
+    # ②a-2 ⚠️ § 颜色代码 → Java 组件（**必须做**，否则服务端会崩）
+    #    Java 的组件类命令参数（/title /tellraw /scoreboard）严格解析，
+    #    出现 § 会抛 "Disallowed chat character: '§'" 并让**整个服务端崩溃**（实测）。
+    #    只在组件类命令上做 —— 实体名里的 § 是字符串参数，必须原样保留。
+    out, n = _convert_section_codes(out)
+    notes.extend(n)
 
     # ②b effect：基岩 `effect <目标> <效果> …` → Java `effect give/clear …`
     if low == 'effect':
