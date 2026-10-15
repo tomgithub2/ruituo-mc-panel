@@ -47,9 +47,87 @@ _BLOCK_AFTER = (
 )
 
 #: 基岩专有命令（Java 没有）—— 见到就原样保留并标注
+#: ⚠️ `replaceitem` 也在这里：它在 **Java 1.17 就被移除**（替代品 `item replace`），
+#:    而基岩的 `slot.hotbar`/`slot.weapon.mainhand` 等槽位名与 Java 的
+#:    `hotbar.0`/`weapon.mainhand` **不是简单对应**（还要处理 data 值），
+#:    自动转换极易转错 —— 所以**只标注、不转**（实测用户 32 条全部用了 `slot.` 与 data 值）。
+#: ⚠️ `titleraw` 同理：Java 没有它，对应的是 `title ... <JSON 文本组件>`。
 _BEDROCK_ONLY = ('tickingarea', 'structure', 'fog', 'camerashake', 'ride',
                  'playanimation', 'inputpermission', 'dialogue', 'camera',
-                 'gametest', 'music', 'schedule')
+                 'gametest', 'music', 'schedule', 'titleraw', 'replaceitem',
+                 'testforblock', 'testforblocks', 'testforbiome',
+                 'setmaxplayers', 'clearspawnpoint', 'immutableworld',
+                 'toggledownfall', 'gettopsolidblock', 'querytarget',
+                 'showborder', 'transfer', 'reloadconfig', 'mobevent',
+                 'worldbuilder', 'scoreboardplayersreset')
+
+
+def _effect_to_java(cmd: str) -> tuple:
+    """基岩 `effect` → Java `effect give` / `effect clear`（语义与参数位置都不同）。
+
+    权威语法（minecraft.wiki Commands/effect）：
+      Java:    effect give <targets> <effect> [seconds] [amplifier] [hideParticles]
+               effect clear [<targets>] [<effect>]
+      Bedrock: effect <player: target> <effect> [seconds] [amplifier] [hideParticles]
+               effect <player: target> clear [<effect>]
+               effect @a haste 0     ← 基岩"清除"的省略写法（seconds=0）
+    """
+    notes = []
+    toks = cmd.split()
+    if len(toks) < 3:
+        return cmd, ['effect 参数不足，未转换']
+    head, target = toks[0], toks[1]
+    if toks[2].lower() == 'clear':
+        # 基岩 `effect <目标> clear [效果]` → Java `effect clear <目标> [效果]`
+        rest = toks[3:]
+        if rest:
+            blk = _maybe_namespace(rest[0])
+            notes.append('effect clear：参数顺序按 Java 规则重排（目标在前）')
+            return 'effect clear %s %s' % (target, blk), notes
+        notes.append('effect clear：参数顺序按 Java 规则重排（目标在前）')
+        return 'effect clear %s' % target, notes
+    effect_raw = toks[2]
+    effect = _maybe_namespace(effect_raw)
+    if effect != effect_raw:
+        notes.append('effect 名补命名空间：%s → %s' % (effect_raw, effect))
+    rest = toks[3:]
+    # 基岩用 `<效果> <秒数> 0` 表示清除（seconds=0 且没有别的参数）
+    if len(rest) == 1 and rest[0] == '0':
+        notes.append('基岩 `effect <目标> <效果> 0` 的语义是**清除该效果**，'
+                     '已转为 Java 的 `effect clear`')
+        return 'effect clear %s %s' % (target, effect), notes
+    out = 'effect give %s %s' % (target, effect)
+    if rest:
+        out += ' ' + ' '.join(rest)
+    notes.append('effect：Java 需要 `give` 关键字（基岩不需要），已补上')
+    return out, notes
+
+
+def _testfor_to_java(cmd: str) -> tuple:
+    """基岩 `testfor <选择器>` → Java `execute if entity <选择器>`。
+
+    权威依据（minecraft.wiki Commands/testfor）：`testfor` 在 **Java 13w45a/1.13 被并入 `execute`**。
+
+    ⚠️ 只对**选择器参数 Java 也支持**的情况转换；
+    基岩专有的选择器参数（`hasitem` / `quantity` / `location` / `slot.` / `data=`）
+    Java **不认识**，此时**不转**并明确告知 —— 转了会得到一条必然报错的命令。
+    """
+    toks = cmd.split(None, 1)
+    if len(toks) < 2 or not toks[1].strip():
+        return cmd, ['testfor 参数不足，未转换']
+    sel = toks[1].strip()
+    low = sel.lower()
+    # ⚠️ 只列**Java 选择器确实不支持**的参数：
+    #    `hasitem` / `quantity=` / `location=` / `data=` / `slot.` 是基岩选择器专有。
+    #    ⚠️ **`m=`（游戏模式）Java 也支持，不要列进来** —— 列进去会误伤本来能转的命令。
+    bedrock_only = [k for k in ('hasitem', 'quantity=', 'location=', 'data=', 'slot.')
+                    if k in low]
+    if bedrock_only:
+        return cmd, ['testfor → Java 的 `execute if entity`，但选择器里用了 Java 不支持的'
+                     '基岩专有参数（%s），**未自动转换**，需人工改写'
+                     % '、'.join(sorted(set(bedrock_only)))]
+    return 'execute if entity %s' % sel, [
+        'testfor 在 Java 1.13 已并入 execute：转为 `execute if entity <选择器>`']
 
 
 def _split_first_word(cmd: str):
@@ -125,6 +203,18 @@ def _convert_execute(cmd: str) -> tuple:
     prefix_parts = []
     body = rest
 
+    # ⚠️ **已经是 Java 式 execute 的命令不能再来一遍** —— 否则会套出非法的双 run：
+    #      /execute @a[scores={…}] at @s run say hi
+    #        → /execute as @a[scores={…}] at @s run at @s run say hi   ❌ 语法错误
+    #    判据：Java 式 execute 用 `run` 分隔子句链，基岩式**没有** `run`。
+    #    只要出现独立的 ` run ` 就认为已是 Java 式（或无法安全判定）→ 原样返回。
+    if re.search(r'(^|\s)run(\s|$)', rest):
+        return cmd, ['已是 Java 式 execute（含 run 子句），无需转换为新版语法']
+    # `as`/`at`/`positioned`/`if`/`unless` 等是 Java 的子句关键字；
+    # 紧跟 execute 出现即为 Java 式（基岩式紧跟的是 @选择器）。
+    if re.match(r'(as|at|positioned|align|anchored|in|facing|on|if|unless)\s', rest):
+        return cmd, ['已是 Java 式 execute（子句关键字开头），无需转换']
+
     # 逐层剥离 `execute <selector> <coords...> ` 直到剩下真正的命令
     while True:
         m = re.match(r'(%s)\s+' % _SELECTOR, body)
@@ -169,7 +259,9 @@ def _convert_execute(cmd: str) -> tuple:
             body = b2
 
     new = 'execute ' + ' '.join(prefix_parts) + 'run ' + body
-    return re.sub(r'\s+', ' ', new).strip(), notes
+    # ⚠️ 收尾压空白必须保护 JSON 参数（tellraw/titleraw 可能嵌在 run 后面）——
+    #    无脑 `re.sub(r'\s+', ' ', …)` 会把文本组件里的空格与换行缩进一起压掉。
+    return _squeeze_ws(new), notes
 
 
 def _convert_tellraw(cmd: str) -> tuple:
@@ -218,14 +310,135 @@ def _convert_tellraw(cmd: str) -> tuple:
     return cmd, notes
 
 
+_RE_COORD_ONE = re.compile(r'^[~^][-+]?[0-9.]*$')
+
+
+def _split_glued_coord(tok: str) -> str:
+    """把粘连的坐标 token 拆成三个：`~~~`→`~ ~ ~`、`~~~-35`→`~ ~ ~-35`、`~~1~`→`~ ~1 ~`。
+
+    ⚠️ 基岩允许把三轴坐标**写在一起**（`~~~`、`~~~-35`、`~~1~`），
+    而 Java **要求空格分隔**。这个差异会让"按 token 下标取参数"的转换全部失效 ——
+    实测（用户真实 BDX）：`fill ~~~-35 ~~~-35 air []` 的命名空间与方块状态都没转。
+
+    ⚠️ 只拆"恰好由 3 个坐标分量首尾相接组成"的 token，别的一律不动：
+      · 含 `=` → 选择器参数（`x=~-3`），不碰；
+      · 拆出来不是 3 段 → 不是粘连坐标，不碰；
+      · `~-3` 这类单轴 → 只有 1 段，不碰。
+    """
+    s = tok or ''
+    if not s or s[0] not in '~^' or '=' in s:
+        return tok
+    parts, buf = [], ''
+    for ch in s:
+        if ch in '~^':
+            if buf:
+                parts.append(buf)
+            buf = ch
+        else:
+            buf += ch
+    if buf:
+        parts.append(buf)
+    if len(parts) != 3:
+        return tok
+    if not all(_RE_COORD_ONE.match(x) for x in parts):
+        return tok
+    return ' '.join(parts)
+
+
+def _normalize_coords(cmd: str) -> str:
+    """把整条命令里所有粘连坐标拆开（保守：只拆"恰好三轴"的 token）。"""
+    if not re.search(r'[~^]', cmd):
+        return cmd
+    toks = cmd.split()
+    changed = False
+    for i, t in enumerate(toks):
+        nt = _split_glued_coord(t)
+        if nt != t:
+            toks[i] = nt
+            changed = True
+    return ' '.join(toks) if changed else cmd
+
+
+def _join_like(orig: str, new_toks: list, old_toks: list) -> str:
+    """按**原文的空白**把 token 拼回去，保留原间隔（不无脑用单空格）。
+
+    ⚠️ 踩过的坑：原来直接 `' '.join(toks)` 重建整条命令 —— 对**所有**命令都生效，
+    于是把 `tellraw` 里 JSON 文本组件的多空格也压成了一个空格，
+    实测把 `{"text":"x   y"}` 变成 `{"text":"x y"}`，**改变了玩家看到的文本**。
+    """
+    if not old_toks:
+        return orig
+    parts = []
+    pos = 0
+    for i in range(len(old_toks)):
+        j = orig.find(old_toks[i], pos)
+        if j < 0:
+            return ' '.join(new_toks)          # 对不上就退回（罕见）
+        gap = orig[pos:j]
+        if i == 0:
+            gap = gap                         # 前导空白原样
+        parts.append(gap + (new_toks[i] if i < len(new_toks) else old_toks[i]))
+        pos = j + len(old_toks[i])
+    parts.append(orig[pos:])                  # 尾部原样
+    return ''.join(parts)
+
+
+def _tokenize_keep_json(cmd: str) -> list:
+    """按空白切词，但**把 JSON 参数当成一个 token**（内部的空白原样保留）。
+
+    这样后面即使重建也不会破坏 JSON 文本组件里的空格与换行。
+    """
+    toks = []
+    buf = ''
+    in_json = 0
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if in_json:
+            buf += ch
+            if ch in '{[':
+                in_json += 1
+            elif ch in '}]':
+                in_json -= 1
+                if in_json == 0:
+                    toks.append(buf)
+                    buf = ''
+            i += 1
+            continue
+        if ch.isspace():
+            if buf:
+                toks.append(buf)
+                buf = ''
+            i += 1
+            continue
+        if ch in '{[':
+            if buf:
+                toks.append(buf)
+                buf = ''
+            in_json = 1
+            buf += ch
+            i += 1
+            continue
+        buf += ch
+        i += 1
+    if buf:
+        toks.append(buf)
+    return toks
+
+
 def _convert_block_name_params(cmd: str) -> tuple:
     """给 setblock/fill 等的方块参数补 minecraft: 前缀。"""
     notes = []
-    toks = cmd.split()
-    if not toks:
+    if not cmd.strip():
         return cmd, notes
-    head = toks[0].lower()
-    out = list(toks)
+    # 必须区分「原 token 列表」与「输出 token 列表」，最后按原文空白拼回 ——
+    # 不这么做的话会压掉 JSON 参数里的空格（实测踩到）。
+    old = _tokenize_keep_json(cmd)
+    if not old:
+        return cmd, notes
+    head = old[0].lower()
+    out = list(old)
     touched = []
 
     def ns_at(idx):
@@ -237,8 +450,21 @@ def _convert_block_name_params(cmd: str) -> tuple:
 
     if head == 'setblock' and len(out) >= 5:
         ns_at(4)
-    elif head == 'fill' and len(out) >= 8:
-        ns_at(7)
+    elif head == 'fill':
+        # ⚠️ `fill <起> <止> <方块> [模式]` —— 方块名在**第 7** 个 token（下标 6），
+        #    而原来写的是下标 7（那是模式位）→ 补命名空间补到了 `replace` 上，
+        #    真方块名反而没补。实测：`fill ~~~-35 ~~~-35 stone 0 replace`
+        #    输出 `... minecraft:stone replace` 看似对，是因为有 `0` 顶着；
+        #    去掉 data 值 `0` 之后就错位到 `replace` 了。
+        #    这里改用「找到第一个不以 ~/^/数字开头的 token」= 方块名所在位置。
+        idx = None
+        for i in range(1, len(out)):
+            t = out[i]
+            if t and not (t[0] in '~^' or _is_number(t)):
+                idx = i
+                break
+        if idx is not None:
+            ns_at(idx)
     elif head in ('blockdata',):
         pass
     elif 'detect' in cmd:
@@ -247,13 +473,19 @@ def _convert_block_name_params(cmd: str) -> tuple:
             blk = m.group(2)
             nb = _maybe_namespace(blk)
             if nb != blk:
-                out = cmd.replace('detect %s %s' % (m.group(1), blk),
-                                  'detect %s %s' % (m.group(1), nb)).split()
+                # 只替换那一个 token，别重建整条命令（否则会压掉 JSON 里的空格）
+                out = list(old)
+                for i, t in enumerate(out):
+                    if t == blk:
+                        out[i] = nb
+                        break
                 touched.append(blk)
 
     if touched:
         notes.append('补命名空间：%s' % '、'.join(sorted(set(touched))[:6]))
-    res = ' '.join(out)
+    # ⚠️ 按**原文的空白**拼回（`_join_like`），不要 `' '.join(out)` ——
+    #    后者会把 JSON 参数里的多空格压掉（实测 `{"text":"x   y"}` → `{"text":"x y"}`）。
+    res = _join_like(cmd, out, old)
 
     # setblock/fill 的数字 data 值（Java 1.13+ 不需要）
     if head in ('setblock', 'fill'):
@@ -279,6 +511,21 @@ def convert_command(cmd) -> tuple:
         return text, []
 
     notes = []
+    stripped = text.strip()
+
+    # ⚠️ **前导 `/` 必须在入口处剥掉，否则整条链路都认不出命令**
+    #    命令方块里存的就是 `/xxx` 这种带斜杠的形式，而下面所有子转换器
+    #    （`_convert_execute` 用 `cmd[len('execute'):]`、`_convert_tellraw` 等）
+    #    都假设命令**不带**前导斜杠 —— 原来只把首词 lstrip('/') 用于判断，
+    #    却把带斜杠的原串传下去，导致 `execute` 永远匹配不上，
+    #    返回"execute 形式无法识别（既不是旧版也不是新版）"。
+    #    实测后果：用户 BDX 里 **全部带斜杠的命令一条都转不了**（kept 1068、converted 仅 41）。
+    slash = stripped.startswith('/')
+    if slash:
+        stripped = stripped[1:].lstrip()
+    if not stripped:
+        return text, []
+
     head, _rest = _split_first_word(stripped)
     low = head.lower().lstrip('/')
 
@@ -286,7 +533,16 @@ def convert_command(cmd) -> tuple:
     if low in _BEDROCK_ONLY:
         return text, ['基岩版专有命令 `/%s`，Java 版没有对应命令，已原样保留' % low]
 
-    out = stripped
+    # ⚠️ 网易《我的世界》中国版给一些命令加了 `x` 前缀变体（实测见 `xplayanimation`、`xexecute`）。
+    #    它们同样是基岩专有（Java 没有），一律原样保留并标注，
+    #    免得被当成未知命令而误判"无法识别"。
+    if low.startswith('x') and len(low) > 1:
+        return text, ['基岩版（网易）专有命令 `/%s`，Java 版没有对应命令，已原样保留' % low]
+
+    # ① 先把**粘连坐标**拆开（`~~~-35` → `~ ~ ~-35`）——
+    #    必须放在 execute 判断与所有"按 token 下标取参数"的逻辑**之前**，
+    #    否则坐标粘连会让 token 数量变少、后面全部取错位置（实测）。
+    out = _normalize_coords(stripped)
 
     # ① execute（旧版→新版 / 嵌套 / detect）
     if low == 'execute':
@@ -296,6 +552,16 @@ def convert_command(cmd) -> tuple:
     # ② tellraw 的 rawtext
     if low == 'tellraw':
         out, n = _convert_tellraw(out)
+        notes.extend(n)
+
+    # ②b effect：基岩 `effect <目标> <效果> …` → Java `effect give/clear …`
+    if low == 'effect':
+        out, n = _effect_to_java(out)
+        notes.extend(n)
+
+    # ②c testfor → execute if entity（Java 1.13 起已并入 execute）
+    if low == 'testfor':
+        out, n = _testfor_to_java(out)
         notes.extend(n)
 
     # ③ 方块名补命名空间（含 detect）
@@ -308,6 +574,10 @@ def convert_command(cmd) -> tuple:
                      '未自动改写，建议人工核对')
     if re.search(r'\{[^}]*\*[^}]*\}', out):
         notes.append('命令里的 NBT 通配符 `*` 写法在 Java 版可能不同，建议人工核对')
+
+    # 原来是 `/xxx` 就还原成 `/xxx`（命令方块里习惯带斜杠）
+    if slash and not out.startswith('/'):
+        out = '/' + out
 
     return out, notes
 
@@ -410,6 +680,16 @@ def convert_to_bedrock(cmd) -> tuple:
         return text, ['命令含多行（%d 行），逐行转换会把换行并成一条非法命令，'
                       '已原样保留，建议人工处理' % len([x for x in text.splitlines() if x.strip()])]
 
+    # ⚠️ 与正向同理：**前导 `/` 必须在入口处剥掉**，否则 `_java_execute_to_bedrock`
+    #    （用 `cmd[len('execute'):]`）认不出带斜杠的命令 —— 命令方块里存的正是 `/xxx`。
+    slash = stripped.startswith('/')
+    if slash:
+        stripped = stripped[1:].lstrip()
+    if not stripped:
+        return text, []
+    head, _rest = _split_first_word(stripped)
+    low = head.lower().lstrip('/')
+
     notes = []
 
     if low == 'execute':
@@ -430,6 +710,10 @@ def convert_to_bedrock(cmd) -> tuple:
     if n3:
         out = out3
         notes.extend(n3)
+
+    # 原来是 `/xxx` 就还原成 `/xxx`
+    if slash and not out.startswith('/'):
+        out = '/' + out
 
     return out, notes
 
@@ -525,10 +809,31 @@ def _java_execute_to_bedrock(cmd: str) -> tuple:
         notes.append('按语义折叠：execute 坐标取 if block 的坐标 %s，'
                      'detect 也查同一处（基岩 detect 的坐标与 execute 坐标是两处，'
                      '取同值最保险）' % dcoords)
-        return re.sub(r'\s+', ' ', out).strip(), notes
+        return _squeeze_ws(out), notes
 
     out = 'execute %s %s %s' % (as_sel, coords, body)
-    return re.sub(r'\s+', ' ', out).strip(), notes
+    return _squeeze_ws(out), notes
+
+
+def _squeeze_ws(cmd: str) -> str:
+    """压缩命令里的多余空白，但**绝不动 JSON 参数内部**。
+
+    ⚠️ 踩过的坑：转换末尾用 `re.sub(r'\\s+', ' ', out)` 无脑压空白，
+    把 `tellraw`/`titleraw` 的 JSON 文本组件里的空格和换行也一起压掉了 ——
+    实测把 `"\\\\n    §e▏..."` 压成 `"\\\\n §e▏..."`，**改变了玩家看到的文本排版**。
+    JSON 是从**第一个 `{` 或 `[`** 开始的部分；那之后原样保留。
+    """
+    s = cmd or ''
+    cut = len(s)
+    for ch in ('{', '['):
+        i = s.find(ch)
+        if i != -1:
+            cut = min(cut, i)
+    head, tail = s[:cut], s[cut:]
+    head = re.sub(r'\s+', ' ', head)
+    # 头部压缩后可能留下尾部空格，去掉（但不要动 tail）
+    return (head.rstrip() + (' ' if head.strip() and tail and not head.endswith(' ') else '')
+            + tail).strip()
 
 
 def _component_to_rawtext(cmd: str, head: str) -> tuple:

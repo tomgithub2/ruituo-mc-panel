@@ -39,8 +39,15 @@ _RE_TICKTIME = re.compile(
 _RE_PAPER_TICK = re.compile(r'tick times[^:]*:\s*(.+?)(?:\n|$)', re.I)
 _RE_TRIPLET = re.compile(r'([0-9.]+)\s*/\s*([0-9.]+)\s*/\s*([0-9.]+)')
 _RE_MSPT = re.compile(r'(?:MSPT|ms/t|ms per tick)[^0-9]{0,12}([0-9.]+)', re.I)
+#: 服务端报告「跑不满」的信号。⚠️ 实测真实变体有**三种**，旧正则只覆盖一种：
+#:   ① `Can't keep up! Is the server overloaded? Running 2345ms or 46 ticks behind`  ← 最常见
+#:   ② `Can't keep up! Did the system time change, or is the server overloaded? Running 5000ms behind, skipping 100 tick(s)`
+#:   ③ `Can't keep up! ... Running 1ms or 0 ticks behind`
+#: 旧写法要求 `Running N ms behind` 紧邻，所以 ① 匹配不到（兜底形同虚设）。
 _RE_CANT_KEEP_UP = re.compile(
-    r"Can't keep up!.*?(?:Running\s+(\d+)\s*ms behind|skipping\s+(\d+)\s+tick)", re.I | re.S)
+    r"Can't keep up!.*?Running\s+(\d+)\s*ms"
+    r"(?:\s+or\s+(\d+)\s+ticks?\s+behind|\s+behind)",
+    re.I | re.S)
 _RE_DONE = re.compile(r'Done \(([0-9.]+)s\)!', re.I)
 _RE_UNKNOWN = re.compile(r'unknown or incomplete command|unknown command|command not found|'
                          r'incorrect argument|is not a (?:valid|known) command', re.I)
@@ -463,6 +470,97 @@ def _wait_budget(cfg: dict = None) -> float:
     return 6.0
 
 
+#: 实例 id → (失败次数, 下次允许重试的时间戳)。
+#: ⚠️ 这是"**不装任何插件也能用**"的关键：`vanilla` 与**原版 Fabric** 都**没有 `tps`
+#: 命令**（只有 Paper/Purpur/Spigot 或装了 spark 才有）。如果每点一次刷新就发一条
+#: 不存在的命令，会在服务端控制台一直刷 "Unknown command" ——
+#: 用户明确要求「开源项目要求不仅装了某某插件的可以用」，所以必须能安静地降级。
+#: 做法：连续探测失败就**退避**（越来越久才再试一次），平时不再打扰控制台。
+_tps_probe_state = {}
+_tps_probe_lock = threading.Lock()
+#: 退避阶梯（秒）：第 1 次失败后 60s 内不再试，之后 5min、30min 封顶
+_TPS_BACKOFF = (60.0, 300.0, 1800.0)
+
+
+def _probe_allowed(iid) -> bool:
+    with _tps_probe_lock:
+        st = _tps_probe_state.get(iid)
+    if not st:
+        return True
+    fails, next_at = st
+    return time.time() >= next_at
+
+
+def _probe_failed(iid) -> None:
+    """记一次探测失败并推到下一档退避。"""
+    with _tps_probe_lock:
+        fails = (_tps_probe_state.get(iid) or (0, 0))[0] + 1
+        wait = _TPS_BACKOFF[min(fails - 1, len(_TPS_BACKOFF) - 1)]
+        _tps_probe_state[iid] = (fails, time.time() + wait)
+
+
+def _probe_ok(iid) -> None:
+    with _tps_probe_lock:
+        _tps_probe_state.pop(iid, None)
+
+
+def tps_from_server_log(iid) -> dict:
+    """**不需要任何插件**的兜底：从服务端日志里读它**自己报告**的 tick 健康度。
+
+    ⚠️ 诚实性说明：这里**不是精确 TPS**，而是服务端自己打印的"卡顿/超时"信号：
+      · `Can't keep up! Is the server overloaded? Running Xms or N ticks behind`
+        —— 原版 / Paper / Fabric 都会打这条，**任何核心都有**；
+      · Paper/Purpur 还会打 `Server overloaded ... (N ms)` 之类的 tick 超时。
+    只有能算出确定值时才返回；否则返回空（**绝不用 20.0 这种"看着正常"的值糊弄**）。
+    """
+    out = {'available': False, 'tps': None, 'mspt': None,
+           'source': None, 'raw': '', 'note': ''}
+    try:
+        from .process_manager import manager
+        inst = manager.get(iid)
+        lines = [(x.get('line', '') if isinstance(x, dict) else str(x))
+                 for x in inst.tail(300)]
+    except Exception:
+        return out
+    if not lines:
+        return out
+    text = '\n'.join(lines)
+    # 服务端自己报告"落后了多少 ms / 多少 tick" —— 这是**任何核心都有**的信号，
+    # 不需要装任何插件。组 1 = 落后毫秒数，组 2 = 落后 tick 数（可能没有）。
+    m = _RE_CANT_KEEP_UP.search(text)
+    if m:
+        out['raw'] = m.group(0)[:160]
+        try:
+            lag_ms = int(m.group(1)) if m.group(1) else None
+        except (TypeError, ValueError):
+            lag_ms = None
+        try:
+            behind = int(m.group(2)) if m.group(2) else None
+        except (TypeError, ValueError):
+            behind = None
+        if lag_ms is not None or behind is not None:
+            # 服务端自己说"落后了"，说明**跑不满 20 TPS**。
+            # 日志里没有窗口信息，给不出精确 TPS —— 所以**不给数值**，
+            # 只如实说"未达标 + 落后多少"（诚实优先于好看）。
+            out['available'] = False
+            out['source'] = 'server-log'
+            detail = []
+            if lag_ms is not None:
+                detail.append('落后 %d ms' % lag_ms)
+            if behind is not None:
+                detail.append('%d tick' % behind)
+            out['note'] = ('服务端自身日志报告「Can\'t keep up!（%s）」，'
+                           '说明当前跑不满 20 TPS。该核心不提供 TPS 命令；'
+                           '装 spark 插件或改用 Paper/Purpur 可获得精确数值。'
+                           % '、'.join(detail))
+            return out
+    # 完全没有信号时：明确说"该核心没有可用的 TPS 来源"，而不是报错
+    out['note'] = ('该服务端核心不提供 TPS 命令（原版与 Fabric 原版都没有），'
+                   '日志里也没有卡顿信号 —— 因此无法给出 TPS。'
+                   '可通过安装 spark 插件或改用 Paper/Purpur 获得。')
+    return out
+
+
 def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                           wait: float = None) -> dict:
     """**按需**取一次 TPS：优先走 stdin（不碰 RCON），取不到才回退 RCON。
@@ -498,8 +596,15 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
             memo = _memo_get(iid)
             if memo:
                 candidates = [memo]
-            else:
+            elif _probe_allowed(iid):
                 candidates = _candidate_tps_commands(row)
+            else:
+                # ⚠️ **退避中**：这台机器的核心没有可用的 TPS 命令
+                #    （典型：vanilla / 原版 Fabric，没装 spark）。
+                #    此时**一条命令都不发** —— 否则每次点刷新都在服务端控制台
+                #    刷一行 "Unknown command"。走"服务器日志兜底"如实说明原因。
+                candidates = []
+                result['note'] = '该核心无可用 TPS 命令（退避中，不打扰服务端控制台）'
 
             for c in candidates:
                 r = manager.send_command(iid, c)
@@ -516,6 +621,7 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                 probe_deadline = time.time() + 1.5
                 probe_lines = []
                 probe_size = 0
+                probe_unknown = False
                 try:
                     wd = getattr(inst, 'workdir', '') or ''
                     lp = os.path.join(wd, 'logs', 'latest.log') if wd else ''
@@ -523,6 +629,7 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                 except Exception:
                     lp, probe_size = '', 0
                 found = False
+                unknown_hit = False
                 while time.time() < probe_deadline:
                     time.sleep(0.25)
                     try:
@@ -539,15 +646,30 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
                                 probe_size = cur
                     except Exception:
                         pass
+                    # ⚠️ 服务端明确回 "Unknown command" = 这条命令这台机器**没有**，
+                    #    是比"超时没看到输出"更确定的失败信号（可以立刻换下一条，
+                    #    不用把 1.5 秒等满）。
+                    if not unknown_hit and probe_lines and _RE_UNKNOWN.search('\n'.join(probe_lines)):
+                        unknown_hit = True
+                        probe_unknown = True
+                        break
                     if probe_lines and parse_log_tps(probe_lines).get('tps'):
                         found = True
                         break
                 if found:
                     _memo_set(iid, c)
+                    _probe_ok(iid)              # 探测成功 → 清掉退避计数
                     result['cmd_memo'] = c
                     size0 = probe_size          # 接上已读位置，避免重复读
                     break
                 # 该命令没产出 TPS（多半是 "Unknown command"）→ 试下一条
+            if candidates and not result.get('cmd_memo') and not memo:
+                # 整张候选表都没探出 TPS → 记一次失败，进入退避。
+                # 这样在"没有 TPS 命令"的核心（vanilla / 原版 Fabric）上，
+                # 下次刷新**不会再发命令**，服务端控制台保持干净。
+                # 若明确看到了 "Unknown command"，退避照旧直接生效。
+                _probe_failed(iid)
+                result['probe_backoff'] = True
             if sent:
                 # ⚠️ 取回显有两条路，**优先读日志文件**：
                 #   `_pump` 从子进程 stdout 读到的每一行都会**同时**写进
@@ -672,6 +794,21 @@ def collect_tps_on_demand(iid, row: dict, log_lines_fn=None, cfg: dict = None,
 
     if result['available']:
         return result
+
+    # ---- 路线 1.5：**不需要任何插件/命令**的兜底 —— 读服务端自己日志里的
+    #      "Can't keep up" / tick 超时信号，或至少如实说明"该核心没有 TPS 来源"。
+    #      放在 RCON 之前：这一路零成本、且对"没装插件的机器"给出了有意义的答复。
+    try:
+        sl = tps_from_server_log(iid)
+        if sl.get('available'):
+            result.update(sl)
+            return result
+        if sl.get('note') and not result.get('note'):
+            result['note'] = sl['note']
+        if sl.get('source') and not result.get('source'):
+            result['source'] = sl['source']
+    except Exception:
+        pass
 
     # 若还给了 log_lines_fn，也用它再试一次（可能面板已从日志里拿到了）
     if log_lines_fn:
