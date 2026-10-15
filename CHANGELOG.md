@@ -3,6 +3,67 @@
 本文件记录芮拓MC开服面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.9] - 2026-10-15
+
+### 🚨 修复：`§` 颜色代码让**整个服务端崩溃**（严重）
+用户导入「指令区GKM_V1.bdx」后，建筑**导入成功**（`Loaded template at 4972,-64,4972`、
+`写入方块 6430`），但紧接着服务端**崩溃**，且**一启动就再崩**（死循环）：
+```
+net.minecraft.ReportedException: Executing command block
+Caused by: java.lang.RuntimeException: Failed to encode Minecraft Component:
+           ... Disallowed chat character: '§'
+```
+**根因**（依据 minecraft.wiki「Formatting codes」）：**Java 里 `§` 只能用于游戏外文本**；
+组件类命令参数（`/title` `/tellraw` `/scoreboard`）会被**严格解析**，
+出现 `§` 会抛异常，而这异常在**命令方块执行路径**上会让服务端整个崩掉
+（实测 Purpur 26.1.2）。
+
+**用户文件里 1031 条命令含 `§`**（`§r §c §7 §l §e §4 §f §b §d §6 §a §9`，
+还有基岩独有的 `§g`(137 处) `§h`(10 处)）。
+
+**修复**：把组件类命令参数里的 `§` → **Java 文本组件字段**：
+```
+/title @a title §e⚝ ▷ §b水上乐园 §e◁
+  → /title @a title [{"text":"⚝ ▷ ","color":"yellow"},{"text":"水上乐园 ","color":"aqua"},…]
+{"rawtext":[{"text":"§e▏§6▎"}]}
+  → [{"text":"▏","color":"yellow","extra":[{"text":"▎","color":"gold"}]}]
+§r → 重置样式   §l/§o/§m/§n/§k → bold/italic/strikethrough/underlined/obfuscated
+§g §h …（基岩独有材质色）→ 用 Java 最接近的标准色近似
+```
+**关键：只改组件类命令** —— `@e[name="§c…"]` 这种**选择器里的实体名是字符串参数、
+不参与组件解析**，`§` 必须**原样保留**（否则改坏语义）。
+
+**实测（真实数据，8373 条命令）**：
+```
+组件类命令里的 § 已彻底清除   545 条
+scoreboard 纯字符串显示名保留  16 条（安全）
+选择器实体名保留              470 条（必须保留）
+```
+**真机验证**：转换后的 `tellraw`/`title` 用 RCON 发给服务端 → **正常执行**；
+未转换的原命令 → **复现 `Disallowed chat character: '§'`**。
+
+### 修复：NBT 写入层的两个问题
+1. **超范围整数抛英文天书**：`struct.pack` 越界时原样冒泡
+   `error: 'i' format requires -2147483648 <= number <= 2147483647`，
+   用户完全不知道是哪个字段、什么值 → 改为**显式校验 + 中文报错**（带字段语义、实际值、
+   最可能原因与下一步）。
+2. **把合法数据当畸形数据拒绝**：`minecraft:structure_block` 的 **`seed`** 在基岩是
+   **32 位无符号**（实测 `3257619968` `4194199552` …），而 Java 的 NBT int 是**有符号** ——
+   **同一个位模式，只是解释不同** → 应在 `0x80000000~0xFFFFFFFF` 时**按 32 位回绕**
+   （`3257619968` → `-1037347328`，位模式 `0xC22B5600` 不变），而不是报错。
+   真正的畸形值（超 32 位）仍然被拦并给出中文原因。
+
+### 修复：`titleraw` 未转成 `title`
+`/execute … run titleraw …` 这种**嵌在 run 后面**的 `titleraw` 之前会被漏掉
+（`low` 取的是 `execute`）→ 现在按组件类命令统一处理，`titleraw` 会正确变成 `title`。
+
+### 内部：`_extract_component_arg` 的定位 bug
+原先用 `cmd.find(token)` 事后猜位置，会**命中前面的同名子串**
+（`execute … scores={撤离=1..99} … run titleraw … {"rawtext":…}` 里找 `{` 会先命中
+`scores={…}` 的 `{`）→ 改为**分词时直接记录每个 token 的位置**（`_split_tokens_pos`）。
+另外组件参数**可以带未加引号的空格**（`title §e⚝ ▷ §b水上乐园`），
+按 token 只取第一个词会截断 → 组件是最后一个参数，一路吃到命令末尾。
+
 ## [0.3.8] - 2026-10-15
 
 承接用户要求：「**把什么粒子效果什么的名也增加转换（转换成对应的），就是直接扔进去 bdx 包

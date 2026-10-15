@@ -484,17 +484,49 @@ def _write_string(out: bytearray, s: str):
     out += b
 
 
+def _pack_nbt_int(fmt: str, name: str, lo: int, hi: int, v, limits) -> bytes:
+    """把整数按 NBT 的定长格式打包，**越界时给明确的中文报错**。
+
+    ⚠️ 踩过的坑（2026-10-15）：BDX 解析出错的坐标累积成 **73 亿**，
+    一路传到 NBT 序列化层才崩，用户看到的是一句
+        `error: 'i' format requires -2147483648 <= number <= 2147483647`
+    —— 完全不知道是哪一步、哪个值出了问题。
+    这里在写每个整数前**显式校验范围**，并说明"哪个字段、什么值、超出多少"。
+
+    ⚠️ **但"超范围"不都是错误**（同日第二次踩到）：
+    基岩有些字段是**无符号 32 位**（实测 `minecraft:structure_block` 的 `seed`
+    会出现 3257619968、4194199552 这类值），而 Java 的 NBT int 是**有符号**的。
+    同一个 32 位位模式只是解释不同 → 应**按 32 位回绕转成有符号**（保留位模式），
+    而不是报错。判据：若 2^32 范围内的无符号值，回绕即成合法有符号值。
+    """
+    try:
+        i = int(v)
+    except (TypeError, ValueError):
+        raise NbtError('NBT 的 %s 需要整数，实际是 %r' % (name, v))
+    # 无符号 32 位 → 有符号（同一位模式，Java 侧语义正确）
+    if fmt == '>i' and i > hi and i <= 0xFFFFFFFF:
+        i -= 1 << 32
+    if i < lo or i > hi:
+        raise NbtError(
+            'NBT 的 %s 超出取值范围（%d ~ %d），实际是 %d —— '
+            '通常是坐标/尺寸算错了（例如建筑文件解析异常导致数值畸形），'
+            '请检查建筑文件与目标坐标' % (name, lo, hi, i))
+    return struct.pack(fmt, i)
+
+
 def _write_payload(out: bytearray, t: Tag, depth: int, limits: NbtLimits):
     if depth > limits.depth:
         raise NbtError(f'NBT 嵌套超过上限 {limits.depth} 层')
     ty = t.type
     v = t.value
     if ty == 'byte':
-        out.append(int(v) & 0xFF)
+        # byte 按无符号写回（原实现 `& 0xFF` 保留）
+        out += bytes((int(v) & 0xFF,))
     elif ty == 'short':
-        out += struct.pack('>h', int(v))
+        out += _pack_nbt_int('>h', 'short（短整数）', -32768, 32767, v, limits)
     elif ty == 'int':
-        out += struct.pack('>i', int(v))
+        out += _pack_nbt_int('>i', 'int（整数，常用于坐标/尺寸）',
+                             -2147483648, 2147483647, v, limits)
     elif ty == 'long':
         i = int(v)
         if i > 0x7FFFFFFFFFFFFFFF:
