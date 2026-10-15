@@ -324,19 +324,24 @@ def scan_operations(inner: bytes):
             continue
 
         # ---- 光标移动
+        # ⚠️ **这里的字节序曾经写错，导致坐标变成几十亿的垃圾值**（2026-10-15 定位）：
+        #    BDX 的移动值一律是**大端**（与 BDXConverter 的 `unpack('>h')`/`unpack('>i')` 一致），
+        #    而 `_LE.i16()/i32()` 是**小端**（`'<h'`/`'<i'`）——
+        #    读 `00 00 00 02` 会得到 33554432 而不是 2，累积后建筑高度算成 73 亿格，
+        #    预览被 400 拒绝（用户报「好几万格高超出世界高度」，而他的文件本来是正常的）。
+        #    所以这里**显式用大端**读，不用 `_LE` 的 i16/i32。
         if cid in _MOVE_OPS:
             axis, width, implicit = _MOVE_OPS[cid]
             if width == 0:
                 val = implicit if implicit is not None else 1
             else:
                 if width == 1:
-                    val = r.i8()
+                    val = struct.unpack_from('>b', r.d, r.i)[0]
                 elif width == 2:
-                    val = r.i16()
+                    val = struct.unpack_from('>h', r.d, r.i)[0]
                 else:
-                    val = r.i32()
-                if implicit == 0:
-                    val = val if val != 0 else 0
+                    val = struct.unpack_from('>i', r.d, r.i)[0]
+                r.i += width
             ops.append({'id': cid, 'name': 'Move', 'data': {'axis': axis, 'value': val}})
             continue
 
@@ -551,6 +556,152 @@ def _cmd_block_entity_id(state: str) -> str:
 _CMD_BLOCK_MODES = {0: 'impulse', 1: 'repeat', 2: 'chain'}
 
 
+def _nbt_compound(node):
+    """取出 NBT 复合体的 {键: 值}（兼容"裸 dict"与"Tag 复合体"两种形态）。"""
+    if node is None:
+        return None
+    if isinstance(node, dict):
+        return node
+    val = getattr(node, 'value', None)
+    if isinstance(val, dict):
+        return val
+    return None
+
+
+def _nbt_unwrap(v):
+    """把 Tag 值拆成 Python 标量；不是 Tag 就原样返回。"""
+    if hasattr(v, 'value') and not isinstance(v, (dict, list, bytes, bytearray)):
+        return v.value
+    return v
+
+
+def _nbt_key(comp: dict, name: str):
+    """在复合体里找键（大小写不敏感，兼容 Command / command）。"""
+    if name in comp:
+        return name
+    low = name.lower()
+    for k in comp:
+        if str(k).lower() == low:
+            return k
+    return None
+
+
+def _nbt_get_str(node, key):
+    """读复合体里的字符串值（找不到返回 None）。"""
+    comp = _nbt_compound(node)
+    if comp is None:
+        return None
+    k = _nbt_key(comp, key)
+    if k is None:
+        return None
+    v = _nbt_unwrap(comp[k])
+    return v if isinstance(v, str) else (str(v) if v is not None else None)
+
+
+def _nbt_set_str(node, key, value: str) -> bool:
+    """就地改写复合体里的字符串值（保留原来的标量包装方式）。"""
+    comp = _nbt_compound(node)
+    if comp is None:
+        return False
+    k = _nbt_key(comp, key)
+    if k is None:
+        comp[key] = value
+        return True
+    old = comp[k]
+    # 原来是 Tag 就包回 Tag，原来是裸值就直接放
+    if hasattr(old, 'value') and not isinstance(old, (dict, list)):
+        try:
+            from .nbt import Tag
+            comp[k] = Tag.string(value)
+            return True
+        except Exception:
+            pass
+    comp[k] = value
+    return True
+
+
+def _nbt_fix_cmd_id(node, state: str) -> None:
+    """把 NBT 里的方块实体 id 改成与 java 方块类型一致的写法。
+
+    ⚠️ 基岩/网易的 BDX 里 id 常是**旧式短名** `CommandBlock` / `RepeatingCommandBlock`
+    / `ChainCommandBlock`；而 Java 版结构里用的是与方块同名的 id
+    （`minecraft:command_block` 等）。不一致会让方块实体失效 ——
+    方块在、但里面没有命令（用户看到的就是"命令丢了"）。
+    """
+    want = _cmd_block_entity_id(state)
+    _nbt_set_str(node, 'id', want)
+
+
+def _parse_bedrock_states(states: str) -> dict:
+    r'''把**基岩版的方块状态串**解析成 Java 的 {键: 值}。
+
+    ⚠️ 这个格式实测踩过坑，真实的 states（取自 BDX 常量字符串池）长这样：
+        '["infiniburn_bit"=false]'      属性名带双引号、布尔值是裸的
+        '["dirt_type"="normal"]'        字符串值也带双引号
+        '["facing_direction"=5]'        数值裸写
+        '[]'                            没有属性
+    关键点（缺一个都会解析错）：
+      · **最外层 `[]` 是整体包裹**，要去掉；不能按逗号切了就当属性名。
+      · 属性名可能被双引号包着 → 要去掉引号。
+      · 值也可能是 `"..."` → 去掉引号；`true`/`false`/数字则原样保留。
+      · 值里若含 `=` 或 `,`（被引号包着）不能当分隔符 → 优先按引号配对切分。
+
+    同时**兼容**另一种写法 `key=value,key=value`（不带外层方括号、不带引号），
+    因为不同来源/版本的 states 可能是这种，改错了会让原本能用的文件反而坏掉。
+    '''
+    txt = (states or '').strip()
+    if not txt or txt == '[]':
+        return {}
+    out = {}
+
+    # ---- 形态 A：整体被 [ ] 包住（基岩版数组写法）
+    if txt.startswith('[') and txt.endswith(']'):
+        inner = txt[1:-1].strip()
+        if not inner:
+            return {}
+        # 按"引号外"的逗号切分，避免值里的逗号被误切
+        parts, buf, in_q = [], '', None
+        for ch in inner:
+            if ch in '"\'':
+                in_q = None if in_q == ch else (ch if in_q is None else in_q)
+                buf += ch
+            elif ch == ',' and in_q is None:
+                parts.append(buf)
+                buf = ''
+            else:
+                buf += ch
+        if buf:
+            parts.append(buf)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # 找"引号外"的 =
+            key, val, in_q = '', '', None
+            for i, ch in enumerate(part):
+                if ch in '"\'':
+                    in_q = None if in_q == ch else (ch if in_q is None else in_q)
+                elif ch == '=' and in_q is None:
+                    key, val = part[:i], part[i + 1:]
+                    break
+            if not key:
+                continue
+            k = key.strip().strip('"\'')
+            v = val.strip().strip('"\'')
+            if k:
+                out[k] = v
+        return out
+
+    # ---- 形态 B：key=value,key=value
+    for part in txt.split(','):
+        if '=' in part:
+            k, v = part.split('=', 1)
+            k, v = k.strip().strip('"\''), v.strip().strip('"\'')
+            if k and v:
+                out[k] = v
+    return out
+
+
 def _bedrock_block_to_java(name: str, block_data: int = 0, states: str = ''):
     """把 BDX/基岩版的方块标识尽量转成 Java 版方块状态字符串。
 
@@ -566,14 +717,16 @@ def _bedrock_block_to_java(name: str, block_data: int = 0, states: str = ''):
     base = nm
     props = {}
 
-    # PlaceBlockWithBlockStates 的 states 字段是 "key=value,key=value" 形式
+    # ⚠️ states 的真实格式是**基岩版数组写法**，不是 "key=value,key=value"：
+    #      ["infiniburn_bit"=false]        属性名带双引号、值也可能带
+    #      ["dirt_type"="normal"]          多个属性用逗号分隔
+    #      []                              没有属性
+    #    旧写法按 ',' 切、再按 '=' 拆，结果属性名变成 `["infiniburn_bit"`
+    #    （留着 `[` 和引号）、值变成 `false]`（留着 `]`）—— 生成的方块状态形如
+    #      minecraft:bedrock[["infiniburn_bit"=false]]
+    #    完全是坏的。实测用户的 BDX 全部命中这个格式（见 _parse_bedrock_states）。
     if states:
-        for part in states.split(','):
-            if '=' in part:
-                k, v = part.split('=', 1)
-                k, v = k.strip(), v.strip()
-                if k and v:
-                    props[k] = v
+        props.update(_parse_bedrock_states(states))
 
     # 基岩版方块名与 Java 不一致的常见项（只放"确定"的映射，拿不准的不动）
     rename = {
@@ -591,6 +744,20 @@ def _bedrock_block_to_java(name: str, block_data: int = 0, states: str = ''):
     if base in rename:
         note = '方块名按基岩→Java 对照改名：%s → %s' % (base, rename[base])
         base = rename[base]
+
+    # ⚠️ 命令块的状态**属性名**在基岩与 Java 下不一样，必须换名：
+    #    基岩 `facing_direction`(0-5) → Java `facing`(down/up/north/south/west/east)
+    #    基岩 `conditional_bit`     → Java `conditional`
+    #    只换名不换值的话，Java 收到的是无法识别的属性（方块状态应用失败）。
+    if 'command_block' in base:
+        if 'facing_direction' in props:
+            props['facing'] = _cmd_block_facing(props.pop('facing_direction'))
+        if 'conditional_bit' in props:
+            props['conditional'] = props.pop('conditional_bit')
+        # `facing=up` 是 Java 命令块的默认朝向 —— 与 _cmd_block_state 保持一致，
+        # 默认值不写进状态（少一个无意义的调色板条目）。
+        if props.get('facing') == 'up':
+            props.pop('facing', None)
 
     if props:
         return '%s[%s]' % (base, ','.join('%s=%s' % kv for kv in sorted(props.items()))), note
@@ -776,13 +943,36 @@ def to_schematic(author: str, ops: list, strings: list, warnings: list,
                 skipped['runtime_id_block'] = skipped.get('runtime_id_block', 0) + 1
                 continue
             if 'nbt' in d and d.get('nbt'):
-                # PlaceBlockWithNBTData：容器等带 NBT 的方块
+                # PlaceBlockWithNBTData(41)：带 NBT 的方块。
+                #
+                # ⚠️ **命令块大量走这条路**（实测用户的 BDX：1442/1554 个方块是 41），
+                #    它的方块名在 `block`、状态在 `states`、命令在 NBT 的 `Command`。
+                #    原来这里一律当"容器等普通带 NBT 方块"处理 → **命令一个都不转换**
+                #    （cmd_converted 恒为 0，用户报"转换有问题"就是这个）。
                 state, note = _bedrock_block_to_java(d.get('block') or '',
                                                      states=d.get('states') or '')
                 if note:
                     warnings.append(note)
                 be = _nbt_dict_to_tag(d['nbt'])
-                blocks.append({'x': x, 'y': y, 'z': z, 'state': state or 'minecraft:stone', 'nbt': be})
+                # 若这是命令块 → 把 NBT 里的 Command 按所选方向转换
+                if 'command_block' in (state or ''):
+                    raw = _nbt_get_str(d.get('nbt'), 'Command')
+                    if raw is not None:
+                        java, notes = _convert(raw)
+                        _nbt_set_str(d['nbt'], 'Command', java)
+                        # ⚠️ NBT 里若写死了旧 id（如 `CommandBlock`）要跟着方块类型改
+                        _nbt_fix_cmd_id(d['nbt'], state)
+                        if raw.strip():
+                            if java != raw:
+                                converted_cmds.append({'from': raw, 'to': java,
+                                                       'notes': list(notes or [])})
+                            else:
+                                kept_cmds.append({'cmd': raw, 'notes': list(notes or [])})
+                        if notes:
+                            warnings.extend(str(x) for x in notes)
+                    be = _nbt_dict_to_tag(d['nbt'])
+                blocks.append({'x': x, 'y': y, 'z': z,
+                               'state': state or 'minecraft:stone', 'nbt': be})
                 continue
             state, note = _bedrock_block_to_java(d.get('block') or '',
                                                  d.get('blockData') or 0,
