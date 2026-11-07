@@ -3,6 +3,46 @@
 本文件记录芮拓MC面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布] 修复 Java 运行时下载（国内镜像 + 解压误判）（2026-11-07）
+
+### 现象
+设置页 / 创建实例页里「安装 Java」**长时间无响应最终失败**。实测：
+- Adoptium 官方下载链接指向 **GitHub Releases**，而这台机器到 `github.com` 只有
+  **15.7 KB/s**（52MB 的 JRE 需约 55 分钟，必然超时）；
+- Microsoft 源 319 KB/s（可用的备选）；
+- **清华 TUNA 镜像 1.72 MB/s**（快 100 倍，52MB 仅 30 秒）。
+
+### 修复 1：新增国内镜像源（`mirror`），`auto` 优先级为 镜像 → 官方 → Microsoft
+```
+https://mirrors.tuna.tsinghua.edu.cn/Adoptium/{major}/{image}/x64/{os}/{官方文件名}
+```
+**元数据仍取 `api.adoptium.net`**（快、且拿到官方 sha256）→ **走镜像不放松校验**。
+Java 8 在镜像里是另一套布局，探测不到会自动回退官方源。
+
+### 修复 2：解压被 Python 3.10.12 的 `filter='data'` 误判（这才是真正卡死的地方）
+```
+LinkOutsideDestinationError: 'jdk-21.0.13+9-jre/legal/java.naming/ASSEMBLY_EXCEPTION'
+would link to '<target>/java.base/ASSEMBLY_EXCEPTION', which is outside the destination
+```
+Adoptium 包内有 145 个**相对软链接**（如 `../java.base/ASSEMBLY_EXCEPTION`），
+**全部指向包内**（实测 0 个越界）。但 3.10.12 那个 backport 的 `data` 过滤器
+把链接目标解析成了少两层目录的路径，于是把**合法**链接判成越界、安装直接失败。
+
+改为**自行校验**（按正确语义：链接目标相对**链接自身所在目录**解析，拒绝绝对路径 /
+`..` 穿越 / 逃出目标目录的链接），校验通过后用 `filter='fully_trusted'` 解压。
+安全边界不放松，只是不用那套有 bug 的判定。**越界软链仍会被拒绝**（已用构造样本验证）。
+
+### 实测
+```
+Java 21 装好：37 秒   vendor=mirror   sha256_verified=True
+Java 17 装好：35 秒   vendor=mirror
+java -version：Temurin-21.0.13+9 / Temurin-17.0.21 均可正常执行
+```
+
+### 顺带
+- 设置页/创建页文案改为「安装 Java 运行时 · 优先国内镜像」，不再写成「从 Adoptium 安装」
+- 下载源探测接口新增 `mirror` 字段与 `recommended`
+
 ## [未发布] 展示名改为「芮拓MC面板」（2026-11-07）
 
 ### 变更：展示名改为「芮拓MC面板」

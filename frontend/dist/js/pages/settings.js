@@ -132,8 +132,9 @@ Pages.settings = function (app) {
             : C.empty('java', '没有检测到 Java', '系统 PATH、JAVA_HOME 与常见安装目录都没找到可用的 java。可以在这里下载一个。', '')) +
           '<div class="mt"><div class="desc">当前默认：<span class="mono">' + U.esc(cfg.config.default_java || '（自动：PATH 中的 java）') + '</span></div></div>' +
         '</div>' +
-        '<div class="card"><div class="card-head"><h3>从 Adoptium 安装</h3></div>' +
-          '<div class="tip mb">官方 API：api.adoptium.net。下载 Temurin JRE 到 <span class="mono">' + U.esc(javaInfo.java_dir) + '</span>，安装后可直接在实例里选用。</div>' +
+        '<div class="card"><div class="card-head"><h3>安装 Java 运行时</h3></div>' +
+          '<div class="tip mb">优先走<b>国内镜像</b>（清华 TUNA）下载 Adoptium Temurin JRE，镜像不可用时自动回退官方 API / Microsoft。' +
+          '元数据取自 api.adoptium.net，<b>sha256 按官方值校验</b>。下载到 <span class="mono">' + U.esc(javaInfo.java_dir) + '</span>，装完可直接在实例里选用。</div>' +
           '<div class="row tight">' +
             [8, 11, 17, 21, 25].map(function (m) {
               return '<button class="btn sm" data-adopt="' + m + '">Java ' + m + '</button>';

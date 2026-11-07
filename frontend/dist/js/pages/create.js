@@ -203,7 +203,7 @@ Pages.create = function (app) {
 
   function stepJava() {
     return '<div class="card"><div class="card-head"><h3>Java 运行时</h3>' +
-      '<div class="right muted small">面板会自动检测系统 Java，也可从 Adoptium 下载</div></div>' +
+      '<div class="right muted small">面板会自动检测系统 Java，也可从这里下载（优先国内镜像加速）</div></div>' +
       (st.javas.length
         ? '<div class="version-list mb">' + st.javas.map(function (j) {
             return '<div class="version-item' + (j.path === st.javaPath ? ' sel' : '') + '" data-java="' + U.esc(j.path) + '">' +
