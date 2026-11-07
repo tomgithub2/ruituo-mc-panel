@@ -45,6 +45,28 @@ java -version：Temurin-21.0.13+9 / Temurin-17.0.21 均可正常执行
 - 设置页/创建页文案改为「安装 Java 运行时 · 优先国内镜像」，不再写成「从 Adoptium 安装」
 - 下载源探测接口新增 `mirror` 字段与 `recommended`
 
+### 视觉：新皮肤「极光」+ 动效层
+- 新增 `css/aurora.css`（加载在 `theme-mono.css` 之后，删掉该 link 即回退）：
+  - 配色：深空蓝黑底 `#05070D` + **青→蓝→紫**渐变强调（`#22D3EE → #60A5FA → #A78BFA`），
+    语义色（成功/警告/危险/信息）统一到同一明度区间；浅色底同步一套
+  - 动效：极光背景（两层缓慢游动 + 细网格）、渐变流动（品牌字/主按钮/Tab 光条）、
+    卡片悬停抬升 + 跟随光斑、主按钮悬停光泽、页面进入上浮、运行状态呼吸、
+    滚动条与选区配色、`.skeleton` 骨架屏
+  - `prefers-reduced-motion: reduce` 时全部降级为静态
+- 新增 `js/fx.js`：事件委托把鼠标位置写入卡片的 `--mx/--my`（rAF 合并，不逐张绑）
+- **全站交互反馈层**（覆盖所有可点元素）：
+  - 按下缩放 `.btn / .tab / .chip / .badge / .nav a / .core-card / .inst-card / .file-row /
+    .drop-zone / [data-go|act|tab|edit|del|src] / a[href^="#"] / 复选框 / 单选框 / select`
+  - 表格行按下改为变色（不缩放，避免行内容抖动）
+  - **涟漪**：指针按下处扩散一圈（WAAPI，播完即移除）；键盘 Enter/Space 在元素中心补一次
+  - **触摸震动**：`navigator.vibrate(8)`，支持则极短震一下
+  - 关掉系统默认灰色高亮 `-webkit-tap-highlight-color`，换成上面的涟漪
+  - `:focus-visible` 统一焦点环（鼠标点击不出现，只有键盘操作才显示）
+  - 侧栏导航悬停/选中时左侧光条从中间长出；输入框聚焦外发光
+  - Toast / 弹窗入场托举动画；进度条叠加扫光（用 `::after` 叠加，不覆盖原有渐变）
+- favicon 换成新的渐变标
+- 极光背景**不用** `filter: blur()`：满屏模糊在低端机代价太高，径向渐变本身边缘已柔
+
 ### 界面与交互优化
 - **弹窗**：Tab/Shift+Tab 焦点陷阱、自动聚焦（优先 `[autofocus]` → 首个输入框 → 确定）、
   锁背景滚动（`body.modal-open`）、输入框回车 = 点确定（textarea 除外）、关闭后焦点归位
