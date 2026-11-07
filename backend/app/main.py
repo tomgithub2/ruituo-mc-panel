@@ -53,6 +53,12 @@ async def security_headers(request: Request, call_next):
         "img-src 'self' data:; font-src 'self' data:; "
         "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; "
         "frame-ancestors 'none'; form-action 'self'")
+    # ⚠️ API 一律禁缓存：浏览器对无缓存头的 GET 会做启发式缓存，导致
+    #    「检查更新」「更新状态」这类实时接口返回**上一次的结果** ——
+    #    表现就是明明后端已修好，界面还停着旧的版本号与旧的报错。
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
     return response
 
 
