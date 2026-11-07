@@ -192,7 +192,11 @@ def check() -> dict:
     import httpx
     from .hardware import machine_id
     mid = machine_id()
-    url = '%s/api/v1/update/check?machine_id=%s&version=%s' % (server_url(), mid, PANEL_VERSION)
+    # ⚠️ 必须带上 product：官网的更新源是**多产品共用**的，不带产品名就会拿到
+    #    另一个面板（RT面板）的包，被下面的 _product_ok 拒收 → 表现为「永远没有更新」。
+    from urllib.parse import quote as _quote
+    url = '%s/api/v1/update/check?machine_id=%s&version=%s&product=%s' % (
+        server_url(), mid, PANEL_VERSION, _quote(PRODUCT_NAME))
     try:
         r = httpx.get(url, timeout=20.0, follow_redirects=True)
         info = r.json()
