@@ -24,7 +24,18 @@ Pages.instanceDetail = function (app, ctx) {
   });
   C.bindShell(app);
   var body = document.getElementById('page-body');
-  body.innerHTML = '<div class="loading"><span class="spinner"></span>加载实例信息…</div>';
+  /* 骨架屏：先把页面骨架占位画出来，别让内容区先是一条"加载实例信息…"再突然变化 */
+  body.innerHTML =
+    '<div class="page-head"><div class="titles">' +
+      '<div class="sk-line w40"></div>' +
+      '<div class="sk-line w60" style="height:26px;margin-top:10px"></div>' +
+      '<div class="sk-line w80" style="margin-top:12px"></div>' +
+    '</div></div>' +
+    '<div class="card sk-pad">' +
+      '<div class="sk-line w60"></div>' +
+      '<div class="sk-line w80"></div>' +
+      '<div class="sk-line w40"></div>' +
+    '</div>';
 
   function draw() {
     var name = inst ? inst.name : ('#' + id);

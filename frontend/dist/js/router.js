@@ -92,14 +92,31 @@ window.Router = (function () {
       return;
     }
     /* 页面自己用 View.boot() 兜异常；这里再包一层是防"handler 连 boot 都没进就抛"。 */
-    try {
-      matched.r.handler(app, current);
-    } catch (err) {
-      console.error('[router] handler threw', err);
-      var body = document.getElementById('page-body') || app;
-      View.showError(body, err, { title: '页面渲染失败', showStack: true },
-                     { onRetry: function () { resolve(); } });
+    function doRender() {
+      try {
+        matched.r.handler(app, current);
+      } catch (err) {
+        console.error('[router] handler threw', err);
+        var body = document.getElementById('page-body') || app;
+        View.showError(body, err, { title: '页面渲染失败', showStack: true },
+                       { onRetry: function () { resolve(); } });
+      }
     }
+
+    /* 路由切换的平滑过渡：浏览器支持 View Transitions 就交给它做淡入淡出，
+       不支持（或用户要减少动效）就按原来的方式直接渲染 —— 行为不变，
+       只是多一层渐进增强。 */
+    var reduced = window.matchMedia &&
+                  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reduced && typeof document.startViewTransition === 'function') {
+      try {
+        document.startViewTransition(doRender);
+        return;
+      } catch (e) {
+        console.warn('[router] startViewTransition 失败，回退直接渲染', e);
+      }
+    }
+    doRender();
   }
 
   function start() {

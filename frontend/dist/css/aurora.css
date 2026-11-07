@@ -487,6 +487,183 @@ input[type='radio']:checked { transform: scale(1.08); }
   .fx-ripple { display: none; }
 }
 
+/* ============================================================================
+   精致度 + 触摸手感 + 骨架屏
+   ============================================================================ */
+
+/* ---------------- 数字排版：等宽数字，数值不再跳动 ---------------- */
+.stat .v,
+.metric .v,
+.num,
+.mono,
+.mc-val {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+.stat .v { letter-spacing: -.018em; }
+.metric .v { letter-spacing: -.01em; }
+
+/* ---------------- 表面层次：顶部 1px 内高光 + 更细的阴影 ---------------- */
+:root .card,
+:root .stat,
+:root .metric,
+:root .inst-card {
+  box-shadow: var(--shadow-1), inset 0 1px 0 color-mix(in srgb, #FFFFFF 6%, transparent);
+}
+:root .card,
+:root .stat,
+:root .metric,
+:root .inst-card {
+  transition: transform 200ms cubic-bezier(.22, .61, .36, 1),
+              border-color 200ms ease,
+              box-shadow 240ms ease;
+}
+
+/* ---------------- 统计卡：左侧强调条 + 右上角柔光 ---------------- */
+:root .stat::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent-grad);
+  opacity: .9;
+  border-radius: 2px 0 0 2px;
+}
+:root .stat::after {
+  content: '';
+  position: absolute;
+  right: -46px;
+  top: -46px;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft), transparent 70%);
+  pointer-events: none;
+}
+:root .stat:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-2));
+  box-shadow: var(--shadow-2, var(--shadow-1)), inset 0 1px 0 color-mix(in srgb, #FFFFFF 8%, transparent);
+}
+:root .metric:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-1));
+  background: var(--surface-2);
+}
+
+/* 实例卡：悬停抬升 + 强调描边 */
+:root .inst-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2));
+  box-shadow: var(--shadow-2, var(--shadow-1)), 0 18px 38px -26px var(--accent-glow);
+}
+
+/* ---------------- 骨架屏：列表加载时不再是一行"正在读取…" ---------------- */
+@keyframes fx-sk-sheen {
+  from { transform: translateX(-110%); }
+  to   { transform: translateX(210%); }
+}
+.sk-list { display: grid; gap: var(--sp-3); }
+.sk-card {
+  position: relative;
+  overflow: hidden;
+  height: 86px;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+}
+.sk-line {
+  position: relative;
+  overflow: hidden;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--surface-3);
+}
+.sk-line.w40 { width: 40%; }
+.sk-line.w60 { width: 60%; }
+.sk-line.w80 { width: 80%; }
+.sk-line + .sk-line { margin-top: 10px; }
+.sk-card::after,
+.sk-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 14%, transparent), transparent);
+  animation: fx-sk-sheen 1.5s ease-in-out infinite;
+}
+.sk-pad { padding: var(--sp-4); }
+
+/* ---------------- 入场：内容块依次上浮（只做前 6 层，长列表不拖沓） ---------------- */
+@keyframes fx-rise {
+  from { opacity: 0; transform: translateY(9px); }
+  to   { opacity: 1; transform: none; }
+}
+.content > * { animation: fx-rise 340ms cubic-bezier(.22, .61, .36, 1) both; }
+.content > *:nth-child(2) { animation-delay: 35ms; }
+.content > *:nth-child(3) { animation-delay: 70ms; }
+.content > *:nth-child(4) { animation-delay: 105ms; }
+.content > *:nth-child(5) { animation-delay: 140ms; }
+.content > *:nth-child(n+6) { animation-delay: 165ms; }
+
+/* ---------------- 触摸：按下更快，回弹更慢（手感的关键） ---------------- */
+:is(.btn, .tab, .chip, .badge, .nav a, .core-card, .inst-card, .file-row, .drop-zone,
+    [data-go], [data-act], [data-tab], [data-edit], [data-del], [data-src],
+    a[href^='#']):active:not(:disabled) {
+  transition-duration: 60ms;
+}
+
+/* ---------------- 触摸设备：放大命中区（手指比鼠标粗得多） ---------------- */
+@media (hover: none) and (pointer: coarse) {
+  .btn {
+    min-height: 42px;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+  }
+  .tab,
+  .chip {
+    min-height: 42px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .nav a { min-height: 46px; }
+  .file-row { min-height: 46px; }
+  tbody td,
+  tbody th { padding-top: 11px; padding-bottom: 11px; }
+  /* 手指按住时给出更明显的底色，光靠缩放看不清 */
+  :is(.btn, .tab, .chip, .nav a, .file-row, .core-card, .inst-card):active {
+    background-color: var(--bg-active);
+  }
+}
+
+/* ---------------- 拖放区：拖入时脉动提示 ---------------- */
+@keyframes fx-drop-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%      { box-shadow: 0 0 0 7px transparent; }
+}
+.drop-zone.over {
+  animation: fx-drop-pulse 1.2s ease-in-out infinite;
+  border-style: solid;
+}
+
+/* ---------------- 路由切换：支持时用 View Transition 平滑过渡 ---------------- */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 210ms;
+  animation-timing-function: cubic-bezier(.22, .61, .36, 1);
+}
+
+/* ---------------- 降级 ---------------- */
+@media (prefers-reduced-motion: reduce) {
+  .content > * { animation: none; }
+  .sk-card::after,
+  .sk-line::after { animation: none; }
+  .drop-zone.over { animation: none; }
+  :root .stat::after { display: none; }
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation: none; }
+}
+
 /* ---------------- 降级：系统要求减少动效 ---------------- */
 @media (prefers-reduced-motion: reduce) {
   body::before,

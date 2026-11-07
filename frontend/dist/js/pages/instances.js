@@ -28,7 +28,13 @@ Pages.instances = function (app) {
       '</div>' +
     '</div>' +
     '<div class="grid cols-4 mb" id="stats"></div>' +
-    '<div id="inst-list"><div class="loading"><span class="spinner"></span>正在读取实例…</div></div>';
+    /* 骨架屏代替「正在读取…」：布局先占位，数据到了再替换，
+       页面不会从"一行灰字"突然撑成四张卡（内容跳动）。 */
+    '<div id="inst-list" aria-busy="true" aria-label="正在读取实例">' +
+      '<div class="sk-list">' +
+        '<div class="sk-card"></div><div class="sk-card"></div><div class="sk-card"></div>' +
+      '</div>' +
+    '</div>';
 
   document.getElementById('btn-new').addEventListener('click', function () { location.hash = '#/create'; });
   document.getElementById('btn-refresh').addEventListener('click', function () { load(true); });
