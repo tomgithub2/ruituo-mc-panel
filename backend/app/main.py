@@ -1,4 +1,4 @@
-"""芮拓MC开服面板 FastAPI 应用入口。
+"""芮拓MC面板 FastAPI 应用入口。
 
 **完全独立**：不引用、不依赖同仓任何其它面板（RT面板 / ops-panel）的代码、配置、
 数据库或服务；同仓 ops-panel 仅作为"观感与形态"的只读参考。
@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger('mcpanel')
 
 _DOCS_ON = os.environ.get('MC_DOCS') == '1'
-app = FastAPI(title='芮拓MC开服面板', version=PANEL_VERSION,
+app = FastAPI(title='芮拓MC面板', version=PANEL_VERSION,
               docs_url='/api/docs' if _DOCS_ON else None,
               openapi_url='/api/openapi.json' if _DOCS_ON else None,
               redoc_url=None)

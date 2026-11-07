@@ -79,7 +79,7 @@ def main() -> int:
         d.execute('UPDATE users SET status=1 WHERE id=?', (target['id'],))
 
     print()
-    print('  芮拓MC开服面板 · 口令已重置（本地通道）')
+    print('  芮拓MC面板 · 口令已重置（本地通道）')
     print('    账号: %s' % target['username'])
     print('    新口令: %s' % pwd)
     print('  * 该口令只在此处显示一次，不会写入日志或审计。')

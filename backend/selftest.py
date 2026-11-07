@@ -388,7 +388,7 @@ def main():
         st, html, hdrs = req('GET', '/', raw=True)
         text = html.decode('utf-8', 'replace')
         check('GET / 返回 HTML 200', st == 200, 'HTTP %s' % st)
-        check('HTML 含关键元素 (#app / 面板标题)', ('id="app"' in text) and ('芮拓MC开服面板' in text), '')
+        check('HTML 含关键元素 (#app / 面板标题)', ('id="app"' in text) and ('芮拓MC面板' in text), '')
         check('CSP 响应头存在', bool(hdrs.get('content-security-policy')), '')
         for asset in ['/css/tokens.css', '/css/base.css', '/css/components.css', '/css/bg.css', '/js/main.js', '/js/icons.js',
                       '/js/charts.js', '/js/pages/instance_detail.js', '/js/pages/settings.js']:

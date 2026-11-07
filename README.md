@@ -1,4 +1,4 @@
-# 芮拓MC开服面板
+# 芮拓MC面板
 
 > 仓库：**`ruituo-mc-panel`**
 > 一个**独立可跑**的 Minecraft 多服务器管理面板。后端 FastAPI + SQLite，

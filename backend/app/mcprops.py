@@ -99,7 +99,7 @@ def render(model: dict, updates: dict) -> str:
     if extra:
         if out and out[-1].strip():
             out.append('')
-        out.append('# 由 芮拓MC开服面板追加')
+        out.append('# 由 芮拓MC面板追加')
         for k in extra:
             out.append(f'{k}={updates[k]}')
     text = '\n'.join(out)
@@ -126,7 +126,7 @@ def write_props(path: str, updates: dict, backup: bool = True) -> dict:
         return {'ok': False, 'error': err}
     model = read_props(path)
     if not model['exists']:
-        base = '\n'.join([f'# 由 芮拓MC开服面板生成 {time.strftime("%Y-%m-%d %H:%M:%S")}'])
+        base = '\n'.join([f'# 由 芮拓MC面板生成 {time.strftime("%Y-%m-%d %H:%M:%S")}'])
         model = parse(base + '\n')
     if backup and os.path.isfile(path):
         try:

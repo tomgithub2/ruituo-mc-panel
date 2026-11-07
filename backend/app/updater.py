@@ -171,8 +171,11 @@ def server_url() -> str:
 #: 本产品标识。官网的更新源是**全局的**（同一个 `update_packages` 表），
 #: 若不校验产品，就会拿到**别的产品的包**（实测：MC 面板查到了「芮拓面板 2.0.0-rc3」，
 #: 因为它的版本号更高）。所以必须用 manifest 里的 product 字段做归属校验。
-PRODUCT_NAME = '芮拓MC开服面板'
-PRODUCT_ALIASES = ('芮拓MC开服面板', 'ruituo-mc-panel', 'mc-panel', 'MC 开服面板')
+PRODUCT_NAME = '芮拓MC面板'
+#: ⚠️ 旧名必须留在别名里：官网更新清单（`update_packages.product`）可能还是旧名，
+#:    去掉会让那些包被判成"别的产品"而拒收。改名只改 PRODUCT_NAME，别名只增不减。
+PRODUCT_ALIASES = ('芮拓MC面板', '芮拓MC开服面板', '云枢MC开服面板',
+                   'ruituo-mc-panel', 'mc-panel', 'MC 开服面板')
 
 
 def _product_ok(manifest: dict) -> bool:

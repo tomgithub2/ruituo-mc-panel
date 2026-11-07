@@ -55,7 +55,7 @@ def accept_eula(row: dict) -> dict:
     d = workdir_of(row)
     path = os.path.join(d, 'eula.txt')
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
-    content = (f'# 由 芮拓MC开服面板于 {ts} 自动接受 Minecraft EULA\n'
+    content = (f'# 由 芮拓MC面板于 {ts} 自动接受 Minecraft EULA\n'
                f'# https://aka.ms/MinecraftEULA\n'
                f'eula=true\n')
     with io.open(path, 'w', encoding='utf-8', newline='\n') as f:

@@ -1,7 +1,29 @@
 # 变更日志
 
-本文件记录芮拓MC开服面板每个版本的改动。
+本文件记录芮拓MC面板每个版本的改动。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [未发布] 展示名改为「芮拓MC面板」（2026-11-07）
+
+### 变更：展示名改为「芮拓MC面板」
+- 全称：芮拓MC开服面板 → **芮拓MC面板**
+- 简称：芮拓面板 → **芮拓MC面板**（与全称一致）
+- 徽标保持「**芮拓**」，英文副标题保持 `MC SERVER PANEL`
+- 仓库名 **不动**（`ruituo-mc-panel`），目录 `guanwang/mc`、包名与标识符一律不动
+
+**代码内影响面**：30 个文件 42 处（`config.py site_name`、`main.py` FastAPI title、
+`run.py` 启动横幅、`mcprops.py`/`serverctl.py` 写进用户文件的注释行、
+`updater.py` 的 `PRODUCT_NAME`（旧名保留在 `PRODUCT_ALIASES` 里做兼容）、
+前端 `index.html` 标题 / `components.js` 品牌名 / 各 CSS 头注释、`install.sh` 默认 site_name、
+`selftest.py` 标题断言、`docs/` 与 `README`/`HANDOFF`/`PROGRESS`）。
+
+**刻意保留旧名的地方**（历史记录不能改写）：
+- 本文件下面 0.3.x 的历史条目
+- `PROGRESS.md` 的改名历史表（本次新增第 6 行记录，旧行原样保留）
+- `binding.py` / `hardware.py` / `updater.py` 里引用**另一个产品**「芮拓面板」（官网运维面板）的地方
+
+**顺带修复**：运行中的 `backend/data/config.json` 里 `site_name` 还停留在更早的品牌
+「**云枢**MC开服面板」（历史改名时漏同步运行配置），本次一并对齐到新名。
 
 ## [0.3.9] - 2026-10-15
 

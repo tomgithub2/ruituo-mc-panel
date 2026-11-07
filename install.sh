@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  芮拓MC开服面板 · Linux 一键安装脚本
+#  芮拓MC面板 · Linux 一键安装脚本
 #
 #  与同仓 RT面板（rt-panel）**完全独立、零耦合**：
 #    · 不读写它的任何目录/文件/服务/数据库；不检测它是否存在；不向它注册任何东西
@@ -196,7 +196,7 @@ if [ "$UNINSTALL" = "1" ]; then
   exit 0
 fi
 
-printf "\n${GOLD}  芮拓MC开服面板 · Linux 安装${RST}\n"
+printf "\n${GOLD}  芮拓MC面板 · Linux 安装${RST}\n"
 printf "  ${GREY}安装目录 %s · 端口 %s · 服务名 %s${RST}\n" "$INSTALL_DIR" "$PORT" "$SERVICE_NAME"
 printf "  ${GREY}独立部署：不依赖、不检测、不注册到同机其它面板${RST}\n"
 
@@ -318,7 +318,7 @@ if [ ! -f "$DATA_DIR/config.json" ]; then
 {
   "port": ${PORT},
   "bind_host": "${BIND_HOST}",
-  "site_name": "芮拓MC开服面板",
+  "site_name": "芮拓MC面板",
   "session_hours": 24,
   "max_login_fails": 5,
   "lock_minutes": 10,

@@ -1,4 +1,4 @@
-"""芮拓MC开服面板 全局配置（JSON 持久化 + 目录布局）。
+"""芮拓MC面板 全局配置（JSON 持久化 + 目录布局）。
 
 与 RT面板 对齐：backend/data/config.json 保存面板级配置，
 MC_DATA_DIR 环境变量可整体迁移数据目录。
@@ -35,7 +35,7 @@ PANEL_VERSION = '0.3.9'
 DEFAULTS = {
     'port': 8100,
     'bind_host': '127.0.0.1',
-    'site_name': '芮拓MC开服面板',
+    'site_name': '芮拓MC面板',
     'session_hours': 24,
     'max_login_fails': 5,
     'lock_minutes': 10,

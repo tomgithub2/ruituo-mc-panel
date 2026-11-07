@@ -224,7 +224,7 @@ def ensure_admin_user() -> str:
         banner = [
             '',
             '=' * 68,
-            '  芮拓MC开服面板 · 首次启动，已创建默认账号',
+            '  芮拓MC面板 · 首次启动，已创建默认账号',
             '',
             '    用户名: admin',
             '    角色:   超级管理员（super_admin）',
