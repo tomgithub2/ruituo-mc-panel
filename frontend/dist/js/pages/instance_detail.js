@@ -40,13 +40,33 @@ Pages.instanceDetail = function (app, ctx) {
       '<div id="tab-body"></div>';
     body.querySelectorAll('[data-tab]').forEach(function (el) {
       el.addEventListener('click', function () {
-        if (_tabCleanup) { try { _tabCleanup(); } catch (e) {} _tabCleanup = null; }
-        location.hash = '#/instances/' + id + '/' + el.getAttribute('data-tab');
+        var next = el.getAttribute('data-tab');
+        if (next === tab) return;
+        tab = next;
+        /* 只换 tab 内容，不碰 hash 的导航语义 —— 以前是 location.hash = ...，
+           会触发路由整页重渲染：切一次 tab 就要重新拉一遍实例、整页重画、
+           滚动位置也没了，控制台还会闪一下。地址栏仍然同步（replaceState），
+           刷新页面 / 复制链接进具体 tab 都照常。 */
+        try { history.replaceState(null, '', '#/instances/' + id + '/' + tab); } catch (e) {}
+        document.querySelectorAll('#det-tabs .tab').forEach(function (x) {
+          x.classList.toggle('active', x.getAttribute('data-tab') === tab);
+        });
+        renderTab();
       });
     });
     body.querySelectorAll('[data-act]').forEach(function (b) {
       b.addEventListener('click', function () { lifecycle(b.getAttribute('data-act'), b); });
     });
+    renderTab();
+  }
+
+  /* 渲染当前 tab 的内容区（不动外框）。切换前必须清干净上一个 tab 的
+     定时器与长连接 —— 控制台每进一次会注册两个 interval，不清的话
+     来回切几次就叠成十几个，请求和内存都涨。 */
+  function renderTab() {
+    Store.clearPollers();
+    if (_tabCleanup) { try { _tabCleanup(); } catch (e) {} _tabCleanup = null; }
+    if (!document.getElementById('tab-body')) return;
     var t = TABS.filter(function (x) { return x.k === tab; })[0] || TABS[0];
     (RENDER[t.k] || function () {})();
   }

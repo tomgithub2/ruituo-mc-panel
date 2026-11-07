@@ -253,6 +253,8 @@ td.mono, th.mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .chip.on { background: var(--accent-soft); border-color: var(--border-gold); color: var(--accent-bright); }
 
 /* ---------------------------------------------------------------- 弹窗（第 3 层） */
+/* 弹窗打开时锁住背景滚动：手机上不锁的话，滑动弹窗会把背后的页面一起带跑 */
+body.modal-open { overflow: hidden; }
 .modal-mask {
   position: fixed; inset: 0; background: rgba(3, 5, 8, .66); backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; z-index: 100; padding: var(--sp-5);

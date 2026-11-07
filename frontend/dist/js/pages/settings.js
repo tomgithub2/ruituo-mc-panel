@@ -1,7 +1,7 @@
 /* 设置页：面板 / Java / 下载源 / RCON / 主题 / 高级（缓存、日志占用、统一应用日志） */
 window.Pages = window.Pages || {};
 
-Pages.settings = function (app) {
+Pages.settings = function (app, ctx) {
   app.innerHTML = C.shell({
     active: 'settings',
     crumbs: [{ text: '面板', hash: '#/settings' }, { text: '设置' }]
@@ -10,8 +10,22 @@ Pages.settings = function (app) {
   var body = document.getElementById('page-body');
   body.innerHTML = '<div class="loading"><span class="spinner"></span>读取面板配置…</div>';
 
-  var TAB = 'general';
+  var TAB_LIST = ['general', 'java', 'sources', 'rcon', 'theme', 'advanced', 'password'];
+  /* tab 从 URL 读：`#/settings?tab=java` 刷新后还在，也能直接发给别人。
+     以前 TAB 是个局部变量，刷新一次就跳回「常规」，改 Java 设置的人每次都要重找。 */
+  var TAB = (ctx && ctx.query && ctx.query.tab) || 'general';
+  if (TAB_LIST.indexOf(TAB) < 0) TAB = 'general';
   var cfg = null, javaInfo = null, probe = null, appLog = null;
+  var dirty = false;      // 当前 tab 是否被改过（切走时用它拦一下，别静默丢输入）
+
+  /* 只改地址栏，不触发 hashchange（用 replaceState 而不是赋值 location.hash，
+     否则路由会把整页重画一遍，来回跳 tab 会白屏闪一下） */
+  function syncUrl() {
+    try {
+      var h = '#/settings' + (TAB === 'general' ? '' : '?tab=' + TAB);
+      if (location.hash !== h) history.replaceState(null, '', h);
+    } catch (e) {}
+  }
 
   function loadAll() {
     return Promise.all([
@@ -44,9 +58,41 @@ Pages.settings = function (app) {
         return '<div class="tab' + (TAB === t[0] ? ' active' : '') + '" data-t="' + t[0] + '">' + U.esc(t[1]) + '</div>';
       }).join('') + '</div><div id="set-body"></div>';
     body.querySelectorAll('[data-t]').forEach(function (el) {
-      el.addEventListener('click', function () { TAB = el.getAttribute('data-t'); draw(); });
+      el.addEventListener('click', function () {
+        var next = el.getAttribute('data-t');
+        if (next === TAB) return;
+        if (!dirty) { switchTab(next); return; }
+        /* 有未保存的改动 → 先确认。以前是直接切，用户填了一半的端口/口令
+           就这么没了，而且没有任何提示。 */
+        C.Modal.confirm('放弃未保存的修改？',
+          '「' + tabLabel(TAB) + '」里还有没保存的改动，切换标签页会丢弃它们。',
+          function () { switchTab(next); });
+      });
     });
     (TABS[TAB] || TABS.general)();
+
+    /* 只要在这个 tab 里动过任何输入就算 dirty；切 tab 或重新绘制时复位 */
+    dirty = false;
+    var sb = document.getElementById('set-body');
+    if (sb) {
+      sb.addEventListener('input', function () { dirty = true; });
+      sb.addEventListener('change', function () { dirty = true; });
+    }
+  }
+
+  function tabLabel(k) {
+    var map = { general: '常规', java: 'Java 运行时', sources: '下载源', rcon: 'RCON',
+                theme: '主题与观感', advanced: '高级与日志', password: '修改口令' };
+    return map[k] || k;
+  }
+
+  function switchTab(next) {
+    TAB = next;
+    syncUrl();
+    draw();
+    /* 切 tab 后回到内容顶部：从「高级与日志」切到「常规」时，
+       沿用上一个 tab 的滚动位置会让人以为页面没变 */
+    try { body.scrollIntoView({ block: 'start' }); } catch (e) {}
   }
 
   function field(label, id, value, desc, type) {

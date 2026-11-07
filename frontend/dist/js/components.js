@@ -108,6 +108,12 @@ window.C = (function () {
       : '';
     var theme = document.documentElement.getAttribute('data-theme') || 'auto';
     var dens = document.documentElement.getAttribute('data-density') || 'comfy';
+    /* 浏览器标签页标题跟着当前页面走：以前所有页面都叫「芮拓MC面板」，
+       开几个标签就分不清哪个是实例详情、哪个是设置。 */
+    try {
+      var last = (opts.crumbs || []).filter(function (c) { return c && c.text; }).pop();
+      document.title = (last ? last.text + ' · ' : '') + '芮拓MC面板';
+    } catch (e) {}
     return '' +
       '<div class="shell">' +
         '<aside class="sidebar" id="mc-sidebar">' +
@@ -335,10 +341,22 @@ window.C = (function () {
   };
   window.Bg = Bg;
 
-  /* 弹窗 */
+  /* 弹窗
+     ============================================================================
+     交互上补齐了五件以前没做的事（都是实际操作里会痛的）：
+     1. **焦点陷阱**：Tab / Shift+Tab 在弹窗内循环，不会跑到背后的页面上；
+     2. **自动聚焦**：优先 [autofocus]，其次第一个输入框，最后才是「确定」；
+     3. **锁背景滚动**：弹窗打开时 body 不再跟着滚（手机上尤其明显）；
+     4. **回车提交**：焦点在单行输入框里按 Enter = 点「确定」（textarea 除外）；
+     5. **焦点归位**：关闭后焦点回到打开它的那个按钮，键盘操作不会丢位置。
+     ========================================================================== */
   var Modal = {
+    _prevFocus: null,
+    _trap: null,
     open: function (opts) {
-      Modal.close();
+      Modal.close(true);                        // 关掉上一个，但不要触发焦点归位
+      Modal._prevFocus = document.activeElement;
+
       var mask = document.createElement('div');
       mask.className = 'modal-mask';
       mask.id = 'mc-modal';
@@ -355,6 +373,8 @@ window.C = (function () {
                 U.esc(opts.okText || '确定') + '</button></div>') +
         '</div>';
       document.body.appendChild(mask);
+      document.body.classList.add('modal-open');   // 锁背景滚动
+
       mask.querySelectorAll('[data-x]').forEach(function (b) {
         b.addEventListener('click', function () { Modal.close(); if (opts.onCancel) opts.onCancel(); });
       });
@@ -370,14 +390,52 @@ window.C = (function () {
       });
       mask.addEventListener('click', function (e) { if (e.target === mask) Modal.close(); });
       document.addEventListener('keydown', Modal._esc);
+
+      /* 焦点陷阱 + 回车提交 */
+      Modal._trap = function (e) {
+        if (!document.getElementById('mc-modal')) return;
+        if (e.key === 'Enter') {
+          var t = e.target;
+          if (ok && t && t.tagName === 'INPUT' && !t.disabled) {
+            e.preventDefault();
+            ok.click();
+          }
+          return;
+        }
+        if (e.key !== 'Tab') return;
+        var nodes = mask.querySelectorAll(
+          'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),' +
+          'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
+        var list = Array.prototype.filter.call(nodes, function (n) {
+          return n.offsetParent !== null || n === document.activeElement;
+        });
+        if (!list.length) return;
+        var first = list[0], last = list[list.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      };
+      document.addEventListener('keydown', Modal._trap);
+
       if (opts.onMount) opts.onMount(mask);
+      /* 自动聚焦：把键盘用户直接送到能动手的地方 */
+      var auto = mask.querySelector('[autofocus]') ||
+                 mask.querySelector('.modal-body input:not([type=hidden]):not([disabled]),' +
+                                    '.modal-body select:not([disabled]),.modal-body textarea:not([disabled])') ||
+                 ok || mask.querySelector('[data-x]');
+      if (auto) { try { auto.focus(); if (auto.select && auto.tagName === 'INPUT') auto.select(); } catch (e) {} }
       return mask;
     },
     _esc: function (e) { if (e.key === 'Escape') Modal.close(); },
-    close: function () {
+    close: function (silent) {
       var m = document.getElementById('mc-modal');
       if (m) m.parentNode.removeChild(m);
       document.removeEventListener('keydown', Modal._esc);
+      if (Modal._trap) { document.removeEventListener('keydown', Modal._trap); Modal._trap = null; }
+      document.body.classList.remove('modal-open');
+      if (silent) return;
+      var back = Modal._prevFocus;
+      Modal._prevFocus = null;
+      if (back && back.focus && document.contains(back)) { try { back.focus(); } catch (e) {} }
     },
     confirm: function (title, text, onOk, danger) {
       Modal.open({
