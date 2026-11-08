@@ -117,11 +117,11 @@ window.Icon = (function () {
       '<path d="' + d + '"/></svg>';
   }
 
+  /* 全站只有**一套线性图标**：24×24 网格、stroke 1.5、fill:none、圆头圆角。
+     `filled()` 保留仅为兼容旧调用点，实际渲染与 `svg()` 完全一致 ——
+     不允许再出现实心图标，否则同一界面里会出现两种图标语言。 */
   function filled(name, size, cls) {
-    var d = P[name] || P.dot;
-    var s = size || 16;
-    return '<svg class="ico-svg ' + (cls || '') + '" width="' + s + '" height="' + s +
-      '" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="' + d + '"/></svg>';
+    return svg(name, size, cls);
   }
 
   return { svg: svg, filled: filled, paths: P };

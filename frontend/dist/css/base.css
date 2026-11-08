@@ -21,7 +21,7 @@ code, pre, .mono { font-family: var(--font-mono); }
   font-size: var(--fs-1); letter-spacing: var(--ls-kicker); text-transform: uppercase;
   color: var(--text-muted); font-weight: 600;
 }
-::selection { background: var(--accent-glow); }
+::selection { background: var(--surface-4); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line-3); border-radius: var(--r-pill); border: 2px solid transparent; background-clip: padding-box; }
@@ -38,7 +38,7 @@ code, pre, .mono { font-family: var(--font-mono); }
 }
 .noscript { color: var(--danger); font-size: var(--fs-4); }
 .boot-logo {
-  width: 56px; height: 56px; border-radius: var(--r-xl); background: var(--accent-grad);
+  width: 56px; height: 56px; border-radius: var(--r-xl); background: var(--accent);
   color: var(--accent-ink); font-family: var(--font-mono); font-size: var(--fs-5); font-weight: 800;
   display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-2);
   animation: mc-pulse 1.8s var(--ease) infinite;
@@ -68,7 +68,7 @@ code, pre, .mono { font-family: var(--font-mono); }
   padding: 0 var(--sp-4); border-bottom: 1px solid var(--line-1); flex: 0 0 auto;
 }
 .brand-logo {
-  width: 32px; height: 32px; border-radius: var(--r-md); background: var(--accent-grad);
+  width: 32px; height: 32px; border-radius: var(--r-md); background: var(--accent);
   color: var(--accent-ink); font-family: var(--font-mono); font-weight: 800; font-size: var(--fs-1);
   display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
 }
@@ -98,7 +98,7 @@ code, pre, .mono { font-family: var(--font-mono); }
   height: var(--topbar-h); flex: 0 0 auto; display: flex; align-items: center; gap: var(--sp-4);
   padding: 0 var(--page-pad); border-bottom: 1px solid var(--line-1);
   background: color-mix(in srgb, var(--bg-base) 88%, transparent);
-  backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 30;
+  backdrop-filter: none; position: sticky; top: 0; z-index: 30;
 }
 .crumbs { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-2); color: var(--text-muted); min-width: 0; }
 .crumbs a { color: var(--text-muted); }

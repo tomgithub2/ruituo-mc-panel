@@ -48,54 +48,19 @@
   --r-pill: 999px;
 
   /* ---------------- 三层表面（页面底 / 卡片 / 浮层） ---------------- */
-  --bg-base: #07090D;       /* 第 1 层：页面底 */
-  --bg-sunken: #05070A;
-  --surface-1: #0B0E13;     /* 第 2 层：卡片 */
-  --surface-2: #11151C;     /* 第 3 层：浮层 / 弹窗 */
-  --surface-3: #171C25;     /* hover 抬升 */
-  --surface-4: #1E242E;     /* active / 选中 */
 
-  --bg-deep: #0B0B0F;       /* 侧栏 */
-  --bg-panel: var(--surface-1);
-  --bg-elevated: var(--surface-2);
-  --bg-hover: var(--surface-3);
-  --bg-active: var(--surface-4);
 
   /* hairline 描边（三层各一档，越靠上越亮） */
-  --line-1: #161B23;
-  --line-2: #1E2530;
-  --line-3: #2A323F;
   --border: var(--line-2);
   --border-strong: var(--line-3);
   --border-gold: rgba(184, 134, 11, 0.42);
 
   /* ---------------- 金色强调（渐变只用于主按钮/进度/关键数值） ---------------- */
-  --accent: #B8860B;
-  --accent-bright: #F5D061;
-  --accent-dim: #8A6D1F;
-  --accent-ink: #141003;                        /* 金底上的文字 */
-  --accent-soft: rgba(184, 134, 11, 0.12);
-  --accent-glow: rgba(245, 208, 97, 0.16);
-  --accent-grad: linear-gradient(135deg, #F5D061 0%, #B8860B 58%, #8A6D1F 100%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(245,208,97,.5), rgba(184,134,11,.15));
 
   /* ---------------- 文字 ---------------- */
-  --text-primary: #E6EDF7;
-  --text-secondary: #B9C8DD;
-  --text-muted: #8494AB;
-  --text-faint: #7A879B;
-  --text-inverse: #141003;
 
   /* ---------------- 状态（含备份中蓝） ---------------- */
-  --success: #4FC08D;
-  --warning: #D8A24A;
-  --danger: #E06C75;
-  --info: #5B9BD5;          /* 备份中 / 进行中 */
   --neutral: #6B7A8F;
-  --success-soft: rgba(79, 192, 141, 0.12);
-  --warning-soft: rgba(216, 162, 74, 0.12);
-  --danger-soft: rgba(224, 108, 117, 0.12);
-  --info-soft: rgba(91, 155, 213, 0.12);
 
   /* ---------------- 投影（柔和，不发光） ---------------- */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -145,78 +110,11 @@
 
 /* ============================ 亮色纸面主题 ============================
    小字金必须用深金 #8A6508（#B8860B 在纸面上对比度不足 AA） */
-:root[data-theme='lightgold'] {
-  --bg-base: #F6F3EC;
-  --bg-sunken: #EFEAE0;
-  --surface-1: #FFFDF8;
-  --surface-2: #FFFFFF;
-  --surface-3: #F6F1E6;
-  --surface-4: #EDE4D2;
-  --bg-deep: #FBF8F1;
-  --bg-panel: var(--surface-1);
-  --bg-elevated: var(--surface-2);
-  --bg-hover: var(--surface-3);
-  --bg-active: var(--surface-4);
-
-  --line-1: #EFE7D4;
-  --line-2: #EDDFBD;
-  --line-3: #DCC99C;
-  --border: var(--line-2);
-  --border-strong: var(--line-3);
-  --border-gold: rgba(138, 101, 8, 0.35);
-
-  --accent: #8A6508;              /* 亮色下的"可读金" */
-  --accent-bright: #7A5806;
-  --accent-dim: #A8871F;
-  --accent-ink: #FFFDF8;
-  --accent-soft: rgba(138, 101, 8, 0.09);
-  --accent-glow: rgba(138, 101, 8, 0.16);
-  --accent-grad: linear-gradient(135deg, #C9A227 0%, #8A6508 70%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(138,101,8,.45), rgba(138,101,8,.08));
-
-  --text-primary: #241F14;
-  --text-secondary: #4E4636;
-  --text-muted: #6E6551;
-  --text-faint: #786F5A;
-  --text-inverse: #FFFDF8;
-
-  --success: #1F7A52;
-  --warning: #8B6414;
-  --danger: #B23A45;
-  --info: #2C6AA0;
-  --neutral: #6E6551;
-  --success-soft: rgba(31, 122, 82, 0.1);
-  --warning-soft: rgba(139, 100, 20, 0.1);
-  --danger-soft: rgba(178, 58, 69, 0.1);
-  --info-soft: rgba(44, 106, 160, 0.1);
-
-  --shadow-1: 0 1px 2px rgba(90, 74, 34, 0.1);
-  --shadow-2: 0 4px 14px rgba(90, 74, 34, 0.12);
-  --shadow-3: 0 14px 40px rgba(90, 74, 34, 0.16);
-  --shadow-4: 0 24px 70px rgba(90, 74, 34, 0.2);
-  --shadow: var(--shadow-2);
-  --shadow-lg: var(--shadow-3);
-  --shadow-sm: var(--shadow-1);
-
-  --console-bg: #14120D;
-  --console-bar: #1B1811;
-}
 
 /* 跟随系统：未显式选择主题时，系统亮色 → 纸面 */
 @media (prefers-color-scheme: light) {
   :root[data-theme='auto'] {
-    --bg-base: #F6F3EC; --bg-sunken: #EFEAE0; --surface-1: #FFFDF8; --surface-2: #FFFFFF;
-    --surface-3: #F6F1E6; --surface-4: #EDE4D2; --bg-deep: #FBF8F1;
-    --line-1: #EFE7D4; --line-2: #EDDFBD; --line-3: #DCC99C;
     --border: var(--line-2); --border-strong: var(--line-3);
-    --accent: #8A6508; --accent-bright: #7A5806; --accent-ink: #FFFDF8;
-    --accent-soft: rgba(138, 101, 8, 0.09); --accent-glow: rgba(138, 101, 8, 0.16);
-    --accent-grad: linear-gradient(135deg, #C9A227 0%, #8A6508 70%);
-    --text-primary: #241F14; --text-secondary: #4E4636; --text-muted: #6E6551;
-    --text-faint: #786F5A; --text-inverse: #FFFDF8;
-    --success: #1F7A52; --warning: #8B6414; --danger: #B23A45; --info: #2C6AA0;
-    --success-soft: rgba(31,122,82,.1); --warning-soft: rgba(139,100,20,.1);
-    --danger-soft: rgba(178,58,69,.1); --info-soft: rgba(44,106,160,.1);
     --shadow-1: 0 1px 2px rgba(90,74,34,.1); --shadow-2: 0 4px 14px rgba(90,74,34,.12);
     --shadow-3: 0 14px 40px rgba(90,74,34,.16); --shadow-4: 0 24px 70px rgba(90,74,34,.2);
     --console-bg: #14120D; --console-bar: #1B1811;
@@ -226,86 +124,26 @@
 /* ============================ 彩色主题变体（4 套） ============================
    每套都给全 token 配对（hover / active / border / 文本对比度），暗色变体下的
    强调色文本统一用亮色（对 #0B0E13 的对比度均 ≥ 6:1，过 WCAG AA）。 */
-:root[data-theme='orange'] {
-  --accent: #C2560F; --accent-bright: #FF9A4D; --accent-dim: #7A3A0C;
-  --accent-ink: #1A0D03; --accent-soft: rgba(194, 86, 15, .14);
-  --accent-glow: rgba(255, 154, 77, .18);
-  --accent-grad: linear-gradient(135deg, #FF9A4D 0%, #C2560F 100%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(255,154,77,.5), rgba(194,86,15,.12));
-  --border-gold: rgba(194, 86, 15, .45);
-  --surface-3: #1E1A16; --surface-4: #27211B;
-}
-:root[data-theme='blue'] {
-  --accent: #2563C9; --accent-bright: #7FB6FF; --accent-dim: #17417F;
-  --accent-ink: #04101F; --accent-soft: rgba(37, 99, 201, .14);
-  --accent-glow: rgba(127, 182, 255, .18);
-  --accent-grad: linear-gradient(135deg, #7FB6FF 0%, #2563C9 100%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(127,182,255,.5), rgba(37,99,201,.12));
-  --border-gold: rgba(37, 99, 201, .45);
-  --surface-3: #161B23; --surface-4: #1C2430;
-}
-:root[data-theme='violet'] {
-  --accent: #6D4AC4; --accent-bright: #BFA6FF; --accent-dim: #432C7C;
-  --accent-ink: #0D0719; --accent-soft: rgba(109, 74, 196, .14);
-  --accent-glow: rgba(191, 166, 255, .18);
-  --accent-grad: linear-gradient(135deg, #BFA6FF 0%, #6D4AC4 100%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(191,166,255,.5), rgba(109,74,196,.12));
-  --border-gold: rgba(109, 74, 196, .45);
-  --surface-3: #1A1722; --surface-4: #221D2C;
-}
-:root[data-theme='mint'] {
-  --accent: #0F8A66; --accent-bright: #63E3BC; --accent-dim: #0A5B44;
-  --accent-ink: #03150F; --accent-soft: rgba(15, 138, 102, .14);
-  --accent-glow: rgba(99, 227, 188, .18);
-  --accent-grad: linear-gradient(135deg, #63E3BC 0%, #0F8A66 100%);
-  --accent-grad-soft: linear-gradient(90deg, rgba(99,227,188,.5), rgba(15,138,102,.12));
-  --border-gold: rgba(15, 138, 102, .45);
-  --surface-3: #141F1C; --surface-4: #1A2823;
-}
 /* 亮色纸面下的彩色变体：强调色取深色以保证 AA */
-:root[data-theme='lightorange'] { --accent: #A3480B; --accent-bright: #8A3D09; --accent-grad: linear-gradient(135deg,#D98324,#A3480B); }
-:root[data-theme='lightblue'] { --accent: #1B4E9B; --accent-bright: #16407F; --accent-grad: linear-gradient(135deg,#3E7BD1,#1B4E9B); }
-:root[data-theme='lightviolet'] { --accent: #56379E; --accent-bright: #472D83; --accent-grad: linear-gradient(135deg,#8B6FD6,#56379E); }
-:root[data-theme='lightmint'] { --accent: #0B6E51; --accent-bright: #095B43; --accent-grad: linear-gradient(135deg,#1E9E77,#0B6E51); }
-
-/* ============================ 护眼模式 ============================
-   降低对比刺激：整体压暗一点、降饱和、去掉金色发光 */
-:root[data-eyecare='on'] {
-  --bg-base: #0A0B0A; --bg-sunken: #070807; --surface-1: #101210; --surface-2: #161915;
-  --text-primary: #DDE3D8; --text-secondary: #AEB8A6; --text-muted: #87907F;
-  --accent-glow: rgba(0, 0, 0, 0);
-  --accent: #8A7A3A; --accent-bright: #C9B472;
-  --accent-grad: linear-gradient(135deg, #C9B472 0%, #8A7A3A 100%);
-  --success: #5FA97F; --warning: #C39A55; --danger: #C97C7C; --info: #6E93B8;
-}
 :root[data-eyecare='on'][data-theme='lightgold'],
 :root[data-eyecare='on'][data-theme='auto'] {
-  --bg-base: #F2EFE3; --surface-1: #FAF8EF; --text-primary: #2C2A20;
 }
 
 /* ============================ 高对比度模式 ============================ */
 :root[data-contrast='on'] {
-  --text-primary: #FFFFFF; --text-secondary: #E4ECF7; --text-muted: #C0CCDC; --text-faint: #97A6B8;
-  --line-1: #33404F; --line-2: #3E4C5D; --line-3: #55677C;
   --border: var(--line-2); --border-strong: var(--line-3);
-  --accent-bright: #FFE27A;
 }
 :root[data-contrast='on'][data-theme='lightgold'],
 :root[data-contrast='on'][data-theme='auto'] {
-  --text-primary: #101010; --text-secondary: #2A2A22; --text-muted: #45443A; --text-faint: #5C5B4E;
-  --line-1: #C9B888; --line-2: #B9A470; --line-3: #9C8752;
 }
 
-/* ============================ 毛玻璃开关（不支持时降级为实色） ============================ */
-:root[data-glass-top='on'] .topbar { background: color-mix(in srgb, var(--bg-base) 72%, transparent); backdrop-filter: blur(10px) saturate(1.1); }
-:root[data-glass-side='on'] .sidebar { background: color-mix(in srgb, var(--bg-deep) 78%, transparent); backdrop-filter: blur(12px) saturate(1.1); }
-:root[data-glass-bottom='on'] .modal-mask { backdrop-filter: blur(4px); }
-:root[data-glass-bottom='on'] .modal { background: color-mix(in srgb, var(--surface-2) 92%, transparent); backdrop-filter: blur(14px); }
-:root[data-glass-bottom='on'] .toast { background: color-mix(in srgb, var(--surface-2) 90%, transparent); backdrop-filter: blur(10px); }
-@supports not (backdrop-filter: blur(2px)) {
-  .topbar, .sidebar, .modal, .toast, .modal-mask { backdrop-filter: none !important; background: var(--surface-2) !important; }
-  .sidebar { background: var(--bg-deep) !important; }
-}
+/* ============================ 毛玻璃开关 ============================ */
+/* 设计规范：不使用毛玻璃。这里保留选择器只为兼容旧的 data-glass-* 开关，
+   一律降级为不透明实色，不做任何背景模糊。 */
+:root[data-glass-top='on'] .topbar { background: var(--surface-1); }
+:root[data-glass-side='on'] .sidebar { background: var(--bg-deep); }
+:root[data-glass-bottom='on'] .modal { background: var(--surface-2); }
+:root[data-glass-bottom='on'] .toast { background: var(--surface-2); }
 
 /* ============================ 动效开关 ============================ */
 :root[data-motion='off'] * { animation: none !important; transition: none !important; }

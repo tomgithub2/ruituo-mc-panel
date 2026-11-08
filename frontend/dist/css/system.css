@@ -1,0 +1,361 @@
+/* ============================================================================
+   芮拓MC面板 · system.css —— 唯一的设计系统（design system）
+   ============================================================================
+   四条硬规则，全部落在这一层，并由 tools/design_lint.py 静态强制：
+
+     1. **中性色，不用渐变，不发光**
+        所有颜色取中性灰阶；禁止 linear/radial/conic-gradient、禁止
+        --accent-glow 类彩色阴影、禁止 backdrop-filter 与 filter:blur 装饰。
+        层次只靠「底色递进 + 1px 描边」表达。
+
+     2. **统一设计变量**
+        颜色、间距、圆角、字体、动效时长**只在本文件的 `:root` 里定义**。
+        其它 css 若出现 --bg-base/--accent 等令牌的再定义，lint 直接报错。
+        （tokens.css / theme-mono.css 里的旧色值会在本文件之后被覆盖。）
+
+     3. **一套线性图标**
+        图标只有 js/icons.js 里一份 24×24 / stroke 1.5 / fill:none 的线性路径，
+        `Icon.filled` 已改为与 `svg` 同款，不再有实心态。
+        装饰性的伪元素、光斑、扫光、噪点、网格层一律移除。
+
+     4. **同一列元素左边缘对齐**
+        表头/单元格、指标卡、表单字段、卡片标题统一 text-align:left，
+        并让列内容撑满栅格（justify-self: stretch），左边缘严格对齐。
+
+   加载位置：必须在 tokens.css / base.css / components.css / theme-mono.css 之后。
+   ============================================================================ */
+
+/* ============================ 中性色 · 深色底 ============================ */
+:root,
+:root[data-theme='dark'],
+:root[data-theme='auto'] {
+  /* 表面：只有灰阶递进 */
+  --bg-base: #111113;
+  --bg-sunken: #0B0B0D;
+  --surface-1: #17171A;
+  --surface-2: #1D1D21;
+  --surface-3: #25252A;
+  --surface-4: #2E2E34;
+  --bg-deep: #0E0E10;
+  --bg-panel: var(--surface-1);
+  --bg-elevated: var(--surface-2);
+  --bg-hover: var(--surface-3);
+  --bg-active: var(--surface-4);
+
+  /* 描边 */
+  --line-1: #26262B;
+  --line-2: #33333A;
+  --line-3: #45454E;
+
+  /* 文本 */
+  --text-primary: #ECECEF;
+  --text-secondary: #AFAFB8;
+  --text-muted: #85858F;
+  --text-faint: #6F6F79;
+  --text-inverse: #111113;
+
+  /* 强调色：仍是中性，仅靠明度区分主次 */
+  --accent: #D9D9E0;
+  --accent-bright: #F4F4F7;
+  --accent-dim: #9C9CA6;
+  --accent-ink: #131315;
+  --accent-soft: rgba(255, 255, 255, .06);
+  --accent-glow: transparent;
+  /* 关键：任何漏改的 `background: var(--accent-grad)` 会退化为透明，而不是渐变 */
+  --accent-grad: none;
+  --accent-grad-soft: none;
+
+  /* 语义色：去饱和，够区分即可 */
+  --success: #7FA98C;
+  --warning: #C6A65F;
+  --danger: #C97C7C;
+  --info: #8095AD;
+  --success-soft: rgba(127, 169, 140, .12);
+  --warning-soft: rgba(198, 166, 95, .12);
+  --danger-soft: rgba(201, 124, 124, .12);
+  --info-soft: rgba(128, 149, 173, .12);
+
+  /* 阴影只在浮层用，且是纯黑、不带颜色 */
+  --shadow-1: none;
+  --shadow-2: 0 10px 28px rgba(0, 0, 0, .38);
+  --shadow-3: 0 14px 38px rgba(0, 0, 0, .46);
+  --shadow-4: 0 18px 48px rgba(0, 0, 0, .52);
+}
+
+/* ============================ 中性色 · 浅色底 ============================ */
+:root[data-theme='light'] {
+  --bg-base: #F5F5F6;
+  --bg-sunken: #ECECEE;
+  --surface-1: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --surface-3: #F2F2F4;
+  --surface-4: #E7E7EA;
+  --bg-deep: #FAFAFB;
+  --bg-panel: var(--surface-1);
+  --bg-elevated: var(--surface-2);
+  --bg-hover: var(--surface-3);
+  --bg-active: var(--surface-4);
+
+  --line-1: #E6E6E9;
+  --line-2: #D8D8DD;
+  --line-3: #C4C4CB;
+
+  --text-primary: #16161A;
+  --text-secondary: #45454E;
+  --text-muted: #6B6B75;
+  --text-faint: #80808A;
+  --text-inverse: #FFFFFF;
+
+  --accent: #2B2B31;
+  --accent-bright: #111116;
+  --accent-dim: #5A5A63;
+  --accent-ink: #FFFFFF;
+  --accent-soft: rgba(0, 0, 0, .05);
+  --accent-glow: transparent;
+  --accent-grad: none;
+  --accent-grad-soft: none;
+
+  --success: #4E8060;
+  --warning: #8A6D2A;
+  --danger: #A44F4F;
+  --info: #4A6076;
+  --success-soft: rgba(78, 128, 96, .10);
+  --warning-soft: rgba(138, 109, 42, .10);
+  --danger-soft: rgba(164, 79, 79, .10);
+  --info-soft: rgba(74, 96, 118, .10);
+
+  --shadow-1: none;
+  --shadow-2: 0 8px 22px rgba(16, 16, 20, .10);
+  --shadow-3: 0 12px 30px rgba(16, 16, 20, .12);
+  --shadow-4: 0 16px 40px rgba(16, 16, 20, .14);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme='auto'] {
+    --bg-base: #F5F5F6;
+    --bg-sunken: #ECECEE;
+    --surface-1: #FFFFFF;
+    --surface-2: #FFFFFF;
+    --surface-3: #F2F2F4;
+    --surface-4: #E7E7EA;
+    --bg-deep: #FAFAFB;
+    --bg-panel: var(--surface-1);
+    --bg-elevated: var(--surface-2);
+    --bg-hover: var(--surface-3);
+    --bg-active: var(--surface-4);
+
+    --line-1: #E6E6E9;
+    --line-2: #D8D8DD;
+    --line-3: #C4C4CB;
+
+    --text-primary: #16161A;
+    --text-secondary: #45454E;
+    --text-muted: #6B6B75;
+    --text-faint: #80808A;
+    --text-inverse: #FFFFFF;
+
+    --accent: #2B2B31;
+    --accent-bright: #111116;
+    --accent-dim: #5A5A63;
+    --accent-ink: #FFFFFF;
+    --accent-soft: rgba(0, 0, 0, .05);
+    --accent-glow: transparent;
+    --accent-grad: none;
+    --accent-grad-soft: none;
+
+    --success: #4E8060;
+    --warning: #8A6D2A;
+    --danger: #A44F4F;
+    --info: #4A6076;
+    --success-soft: rgba(78, 128, 96, .10);
+    --warning-soft: rgba(138, 109, 42, .10);
+    --danger-soft: rgba(164, 79, 79, .10);
+    --info-soft: rgba(74, 96, 118, .10);
+
+    --shadow-1: none;
+    --shadow-2: 0 8px 22px rgba(16, 16, 20, .10);
+    --shadow-3: 0 12px 30px rgba(16, 16, 20, .12);
+    --shadow-4: 0 16px 40px rgba(16, 16, 20, .14);
+  }
+}
+
+/* ============================================================================
+   规则 1：去渐变 / 去发光 / 去装饰
+   ============================================================================ */
+
+/* --- 背景层：极光、噪点、暗角、网格全部移除 --- */
+body::before,
+body::after,
+.hero-grid-lines,
+.mm-cross { display: none !important; }
+#mc-bg .bg-vignette,
+#mc-bg .bg-grain { display: none !important; }
+
+/* --- 登录页整块渐变底 → 平涂 --- */
+.login-hero {
+  background: var(--bg-deep) !important;
+}
+.login-hero h1 em {
+  background: none !important;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+  color: var(--text-primary);
+}
+.login-card::before { display: none !important; }   /* 顶部渐变色条 */
+
+/* --- 品牌字：渐变文字 → 纯色 --- */
+.brand-logo {
+  background: none !important;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: currentColor;
+  color: var(--text-primary);
+  animation: none !important;
+}
+
+/* --- 主按钮 / 进度条 / 分隔线：纯色 --- */
+.btn.primary {
+  background: var(--accent) !important;
+  background-image: none !important;
+  color: var(--accent-ink);
+  border-color: transparent;
+  box-shadow: none !important;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-bright) !important;
+  filter: none;
+}
+.btn.primary::before { display: none !important; }   /* 悬停扫光 */
+.progress > i {
+  background: var(--text-secondary) !important;
+  background-image: none !important;
+}
+.progress > i::after { display: none !important; }   /* 扫光 */
+.console-spine {
+  background: var(--line-3) !important;
+  background-image: none !important;
+}
+.inst-card::after { display: none !important; }      /* 卡片渐变覆层 */
+
+/* --- 卡片光斑 / 统计卡装饰条与柔光 --- */
+.card::after,
+.stat::before,
+.stat::after { display: none !important; }
+
+/* --- 涟漪与扫光动画产物 --- */
+.fx-ripple { display: none !important; }
+.sk-card::after,
+.sk-line::after { display: none !important; }
+.skeleton {
+  background: var(--surface-3) !important;
+  background-image: none !important;
+  animation: none !important;
+}
+.tab.active::after { background: var(--text-primary) !important; background-image: none !important; }
+
+/* --- 玻璃拟态：一律去掉模糊 --- */
+.topbar,
+.sidebar,
+.modal,
+.modal-mask,
+.toast,
+.dropdown,
+.popover {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* --- 阴影：表面用 1px 描边替代；浮层保留纯黑阴影 --- */
+.card,
+.stat,
+.metric,
+.inst-card,
+.core-card,
+.btn,
+.badge,
+input,
+select,
+textarea,
+.table-wrap,
+.console-box {
+  box-shadow: none !important;
+}
+.modal,
+.toast,
+.dropdown,
+.popover {
+  box-shadow: var(--shadow-3) !important;
+}
+/* 焦点环用 1px 描边，不用外发光 */
+input:focus,
+select:focus,
+textarea:focus,
+:focus-visible {
+  box-shadow: none !important;
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ============================================================================
+   规则 3：一套线性图标
+   ============================================================================ */
+.ico-svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* 状态点仍保留（信息，不是装饰），但不再呼吸发光 */
+.badge.running .dot,
+.inst-card.running .ring {
+  animation: none !important;
+}
+
+/* ============================================================================
+   规则 4：同一列元素左边缘对齐
+   ============================================================================ */
+/* 表头与单元格 */
+table th,
+table td { text-align: left; vertical-align: top; }
+
+/* 指标卡 / 统计卡：标签与数值同一起始边 */
+.metric,
+.stat,
+.metric .k,
+.metric .v,
+.stat .k,
+.stat .v,
+.stat .s,
+.stat .spark-wrap { text-align: left; }
+
+/* 卡片标题与页头 */
+.card-head h3,
+.card-head .right,
+.page-head .titles,
+.page-head h1,
+.page-head .sub,
+.page-head .kicker { text-align: left; }
+
+/* 表单：标签、说明、控件左边缘严格对齐 */
+.field,
+.field label,
+.field .desc { text-align: left; }
+.field input,
+.field select,
+.field textarea { width: 100%; }
+
+/* 栅格内元素撑满列宽，避免居中造成参差 */
+.metrics > *,
+.grid > *,
+.hero-feats > * { justify-self: stretch; text-align: left; }
+
+/* 列表类：每行内容从同一条竖线开始 */
+.file-row,
+.list-row,
+td,
+th { padding-left: var(--sp-3); }
+
+/* 面包屑与页脚提示保持左对齐 */
+.crumbs { text-align: left; }
