@@ -1,7 +1,9 @@
 # 变更日志
 
 本文件记录芮拓MC面板每个版本的改动。
-格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+
+**版本号规则：大版本.小版本.补丁** —— 第 1 位有破坏性变更才加，第 2 位加新功能，第 3 位只修问题。判定细节见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 
 ## [0.4.1] - 2026-11-08
 
