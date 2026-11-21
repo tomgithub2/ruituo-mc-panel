@@ -355,38 +355,27 @@ Pages.settings = function (app, ctx) {
     var theme = document.documentElement.getAttribute('data-theme') || 'auto';
     var dens = document.documentElement.getAttribute('data-density') || 'comfy';
     var variants = [
-      { k: 'darkgold', n: '暗色 · 金', c: '#F5D061', d: '默认：近黑底 + 金色强调' },
-      { k: 'lightgold', n: '亮色 · 纸面', c: '#8A6508', d: '米白纸面 + 深金（小字用深金保证 AA）' },
-      { k: 'auto', n: '跟随系统', c: '#8494AB', d: '按 prefers-color-scheme 自动切换' },
-      { k: 'orange', n: '活力橙', c: '#FF8A3D', d: '暖橙强调，适合夜间长时间运维' },
-      { k: 'blue', n: '静谧蓝', c: '#4C9AFF', d: '冷静蓝调，弱化视觉疲劳' },
-      { k: 'violet', n: '薰衣草紫', c: '#A78BFA', d: '柔和紫，辨识度高' },
-      { k: 'mint', n: '薄荷绿', c: '#3FD6A8', d: '清爽绿，适合监控常驻' }
+      { k: 'dark', n: '深色', d: '中性灰阶，深色底' },
+      { k: 'light', n: '浅色', d: '中性灰阶，浅色底' },
+      { k: 'auto', n: '跟随系统', d: '按系统偏好自动切换' }
     ];
     document.getElementById('set-body').innerHTML = '' +
       '<div class="grid cols-2">' +
         '<div class="card"><div class="card-head"><h3>主题配色</h3>' +
-          '<div class="right"><span class="badge gold">7 套</span></div></div>' +
+          '<div class="right"><span class="badge">3 种</span></div></div>' +
           '<div class="core-grid">' + variants.map(function (v) {
             return '<div class="core-card' + (theme === v.k ? ' sel' : '') + '" data-theme-set="' + v.k + '">' +
-              '<div class="nm"><span style="width:14px;height:14px;border-radius:4px;background:' + v.c + ';display:inline-block"></span>' +
-              U.esc(v.n) + '</div><div class="ds">' + U.esc(v.d) + '</div></div>';
+              '<div class="nm">' + U.esc(v.n) + '</div><div class="ds">' + U.esc(v.d) + '</div></div>';
           }).join('') + '</div>' +
           '<hr class="hair" />' +
-          '<div class="kicker mb">护眼与对比度</div>' +
-          '<label class="check"><input type="checkbox" id="t-eyecare" />护眼模式（降低饱和与亮度）</label>' +
-          '<label class="check mt"><input type="checkbox" id="t-contrast" />高对比度模式（增强描边与文本对比）</label>' +
+          '<div class="kicker mb">对比度与动效</div>' +
+                    '<label class="check mt"><input type="checkbox" id="t-contrast" />高对比度模式（增强描边与文本对比）</label>' +
           '<label class="check mt"><input type="checkbox" id="t-motion" checked />允许动效（关闭=尊重 prefers-reduced-motion）</label>' +
         '</div>' +
-        '<div class="card"><div class="card-head"><h3>信息密度与毛玻璃</h3></div>' +
+        '<div class="card"><div class="card-head"><h3>信息密度</h3></div>' +
           '<div class="kicker mb">信息密度</div>' +
           '<div class="btn-group mb"><button class="btn sm' + (dens === 'comfy' ? ' active' : '') + '" data-dens="comfy">舒适</button>' +
             '<button class="btn sm' + (dens === 'compact' ? ' active' : '') + '" data-dens="compact">紧凑</button></div>' +
-          '<div class="kicker mb">毛玻璃效果（分别开关）</div>' +
-          '<label class="check"><input type="checkbox" id="t-glass-top" checked />顶栏毛玻璃</label>' +
-          '<label class="check mt"><input type="checkbox" id="t-glass-side" />侧栏毛玻璃</label>' +
-          '<label class="check mt"><input type="checkbox" id="t-glass-bottom" />浮层（弹窗/toast）毛玻璃</label>' +
-          '<div class="tip mt small">浏览器不支持 backdrop-filter 时自动降级成实色背景（面板会检测并提示）。</div>' +
           '<div class="kicker mb mt">顶栏元素可见性</div>' +
           '<label class="check"><input type="checkbox" id="t-show-crumbs" checked />面包屑</label>' +
           '<label class="check mt"><input type="checkbox" id="t-show-clock" checked />时钟</label>' +
@@ -425,18 +414,10 @@ Pages.settings = function (app, ctx) {
       });
     }
     var de = document.documentElement;
-    opt('t-eyecare', 'data-eyecare', de.getAttribute('data-eyecare') === 'on', 'on', 'off');
     opt('t-contrast', 'data-contrast', de.getAttribute('data-contrast') === 'on', 'on', 'off');
     opt('t-motion', 'data-motion', de.getAttribute('data-motion') !== 'off', 'on', 'off');
-    opt('t-glass-top', 'data-glass-top', de.getAttribute('data-glass-top') !== 'off', 'on', 'off');
-    opt('t-glass-side', 'data-glass-side', de.getAttribute('data-glass-side') === 'on', 'on', 'off');
-    opt('t-glass-bottom', 'data-glass-bottom', de.getAttribute('data-glass-bottom') !== 'off', 'on', 'off');
     opt('t-show-crumbs', 'data-show-crumbs', de.getAttribute('data-show-crumbs') !== 'off', 'on', 'off');
     opt('t-show-clock', 'data-show-clock', de.getAttribute('data-show-clock') === 'on', 'on', 'off');
-    if (!window.CSS || !CSS.supports || !CSS.supports('backdrop-filter', 'blur(4px)')) {
-      document.getElementById('set-body').insertAdjacentHTML('beforeend',
-        '<div class="tip warn mt">当前浏览器不支持 backdrop-filter，毛玻璃已自动降级为实色背景。</div>');
-    }
   };
 
   /* ---------------------------------------------------------------- 背景层管理器

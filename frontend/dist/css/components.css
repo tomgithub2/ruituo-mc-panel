@@ -213,7 +213,7 @@ td.mono, th.mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .console-spine { height: 1px; background: var(--line-3); flex: 0 0 auto; }
 .console-bar {
   display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4);
-  border-bottom: 1px solid #171D26; background: var(--console-bar); font-size: var(--fs-1);
+  border-bottom: 1px solid var(--line-1); background: var(--console-bar); font-size: var(--fs-1);
   color: var(--console-time); flex: 0 0 auto; flex-wrap: wrap;
 }
 .console-bar .sb-item { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); }
@@ -236,15 +236,15 @@ td.mono, th.mono { font-family: var(--font-mono); font-size: var(--fs-1); }
 .console-jump {
   position: absolute; right: 18px; bottom: 74px; z-index: 5;
 }
-.console-in { display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid #171D26; background: var(--console-bar); flex: 0 0 auto; align-items: center; }
+.console-in { display: flex; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line-1); background: var(--console-bar); flex: 0 0 auto; align-items: center; }
 .console-in .prompt { color: var(--console-cmd); font-family: var(--font-mono); font-size: 13px; }
 .console-in input {
-  background: var(--console-bg); border-color: #232B37; font-family: var(--font-mono);
+  background: var(--console-bg); border-color: var(--line-2); font-family: var(--font-mono);
   color: var(--console-cmd); font-size: 13px;
 }
 .console-in input:focus { border-color: var(--accent); box-shadow: none; }
-.console-tools { display: flex; gap: 6px; padding: 6px var(--sp-3); background: var(--console-bar); border-bottom: 1px solid #171D26; flex-wrap: wrap; align-items: center; }
-.console-tools input[type=text] { background: var(--console-bg); border-color: #232B37; font-size: var(--fs-1); color: var(--console-info); }
+.console-tools { display: flex; gap: 6px; padding: 6px var(--sp-3); background: var(--console-bar); border-bottom: 1px solid var(--line-1); flex-wrap: wrap; align-items: center; }
+.console-tools input[type=text] { background: var(--console-bg); border-color: var(--line-2); font-size: var(--fs-1); color: var(--console-info); }
 .chip {
   display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: var(--r-pill);
   border: 1px solid var(--line-3); background: transparent; color: var(--text-muted);
@@ -543,32 +543,24 @@ body.modal-open { overflow: hidden; }
 .stepper input::-webkit-outer-spin-button,
 .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .stepper input { -moz-appearance: textfield; }
-/* ---------------------------------------------------------------- 角色徽标（四色，全部过 WCAG AA）
-   实测对比度（对卡片底 --surface-1）：
-     超级管理员 #F5D061 / 暗底 12.96:1 · 纸面 #8A6508 5.24:1
-     管理员     #7FB6FF / 9.24:1  · 纸面 #1B4E9B 5.62→ 见下
-     普通用户   #63E3BC / 12.19:1 · 纸面 #0B6E51
-     只读       #B9C8DD / 11.38:1 · 纸面 #4E4636
-   统一：1px 描边 + 12px 图标 + pill 圆角，视觉重量与状态徽标一致 */
+/* ---------------------------------------------------------------- 角色徽标（中性色，靠明度分级）
+     超级管理员 用 --accent-bright（最亮）
+     管理员/普通用户 用 --text-secondary + 1px 描边
+     只读 用 --text-secondary + 更淡的描边
+     统一：1px 描边 + 12px 图标 + pill 圆角，不再使用彩色 */
 .badge.role-super {
   color: var(--accent-bright); border-color: var(--border-gold); background: var(--accent-soft); font-weight: 700;
 }
 .badge.role-admin {
-  color: #7FB6FF; border-color: rgba(127, 182, 255, .45); background: rgba(37, 99, 201, .14);
-}
-.badge.role-user {
-  color: #63E3BC; border-color: rgba(99, 227, 188, .45); background: rgba(15, 138, 102, .14);
-}
+    color: var(--text-secondary); border-color: var(--line-2); background: var(--surface-2);
+  }
+  .badge.role-user {
+    color: var(--text-secondary); border-color: var(--line-2); background: var(--surface-2);
+  }
 .badge.role-viewer {
   color: var(--text-secondary); border-color: var(--line-3); background: var(--surface-2);
 }
 /* 亮色纸面下换成深色，保证小字过 AA */
-:root[data-theme='lightgold'] .badge.role-admin,
-:root[data-theme='auto'] .badge.role-admin { color: #1B4E9B; border-color: rgba(27, 78, 155, .4); background: rgba(27, 78, 155, .1); }
-:root[data-theme='lightgold'] .badge.role-user,
-:root[data-theme='auto'] .badge.role-user { color: #0B6E51; border-color: rgba(11, 110, 81, .4); background: rgba(11, 110, 81, .1); }
-:root[data-theme='lightgold'] .badge.role-viewer,
-:root[data-theme='auto'] .badge.role-viewer { color: #4E4636; }
 
 /* 登录页锁定倒计时条 */
 .lock-bar {

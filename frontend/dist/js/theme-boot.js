@@ -3,6 +3,8 @@
   var t = 'auto', d = 'comfy';
   try {
     t = localStorage.getItem('mc_theme') || 'auto';
+      /* 旧版彩色主题已删除，未知值统一回落到跟随系统 */
+      if (t !== 'dark' && t !== 'light' && t !== 'auto') t = 'auto';
     d = localStorage.getItem('mc_density') || 'comfy';
   } catch (e) {}
   document.documentElement.setAttribute('data-theme', t);

@@ -53,14 +53,14 @@
   /* hairline 描边（三层各一档，越靠上越亮） */
   --border: var(--line-2);
   --border-strong: var(--line-3);
-  --border-gold: rgba(184, 134, 11, 0.42);
+  --border-gold: var(--line-3);
 
   /* ---------------- 金色强调（渐变只用于主按钮/进度/关键数值） ---------------- */
 
   /* ---------------- 文字 ---------------- */
 
   /* ---------------- 状态（含备份中蓝） ---------------- */
-  --neutral: #6B7A8F;
+  --neutral: #858585;
 
   /* ---------------- 投影（柔和，不发光） ---------------- */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -88,14 +88,14 @@
   --font-mono: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', 'Courier New', monospace;
 
   /* ---------------- 控制台 ---------------- */
-  --console-bg: #04060A;
-  --console-bar: #0A0E13;
-  --console-info: #C9D5E3;
-  --console-warn: #E0B45F;
-  --console-error: #F07C86;
-  --console-cmd: #7FD3A8;
-  --console-time: #74839A;
-  --console-hl: rgba(245, 208, 97, 0.22);
+  --console-bg: #0C0C0C;
+  --console-bar: #141414;
+  --console-info: #C8C8C8;
+  --console-warn: #C6A65F;
+  --console-error: #C97C7C;
+  --console-cmd: #AFAFAF;
+  --console-time: #7A7A7A;
+  --console-hl: rgba(255, 255, 255, 0.10);
 }
 
 /* 紧凑档：信息密度加倍，行距与内边距收一档 */
@@ -108,8 +108,8 @@
   --fs-2: 13px;
 }
 
-/* ============================ 亮色纸面主题 ============================
-   小字金必须用深金 #8A6508（#B8860B 在纸面上对比度不足 AA） */
+/* ============================ 亮色主题 ============================
+   颜色全部来自 system.css 的中性令牌，本文件不再定义颜色。 */
 
 /* 跟随系统：未显式选择主题时，系统亮色 → 纸面 */
 @media (prefers-color-scheme: light) {
@@ -117,24 +117,15 @@
     --border: var(--line-2); --border-strong: var(--line-3);
     --shadow-1: 0 1px 2px rgba(90,74,34,.1); --shadow-2: 0 4px 14px rgba(90,74,34,.12);
     --shadow-3: 0 14px 40px rgba(90,74,34,.16); --shadow-4: 0 24px 70px rgba(90,74,34,.2);
-    --console-bg: #14120D; --console-bar: #1B1811;
+    --console-bg: #F7F7F7; --console-bar: #EFEFEF;
+      --console-info: #2A2A2A; --console-warn: #8A6D2A; --console-error: #A44F4F;
+      --console-cmd: #1F1F1F; --console-time: #6B6B75;
   }
-}
-
-/* ============================ 彩色主题变体（4 套） ============================
-   每套都给全 token 配对（hover / active / border / 文本对比度），暗色变体下的
-   强调色文本统一用亮色（对 #0B0E13 的对比度均 ≥ 6:1，过 WCAG AA）。 */
-/* 亮色纸面下的彩色变体：强调色取深色以保证 AA */
-:root[data-eyecare='on'][data-theme='lightgold'],
-:root[data-eyecare='on'][data-theme='auto'] {
 }
 
 /* ============================ 高对比度模式 ============================ */
 :root[data-contrast='on'] {
   --border: var(--line-2); --border-strong: var(--line-3);
-}
-:root[data-contrast='on'][data-theme='lightgold'],
-:root[data-contrast='on'][data-theme='auto'] {
 }
 
 /* ============================ 毛玻璃开关 ============================ */

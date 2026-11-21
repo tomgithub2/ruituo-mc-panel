@@ -5,8 +5,7 @@ window.C = (function () {
      `dark` / `light` 是显式指定。面板设置页里仍可选旧的彩色变体，
      这里只负责顶栏这个"最常用"的循环。 */
   var THEME_CYCLE = ['auto', 'dark', 'light'];
-  var THEME_LABEL = { auto: '跟随系统', dark: '暗色', light: '亮色',
-                      darkgold: '暗色（金）', lightgold: '亮色纸面' };
+  var THEME_LABEL = { auto: '跟随系统', dark: '深色', light: '浅色' };
   function themeLabel(t) { return THEME_LABEL[t] || t || '跟随系统'; }
   function themeNext(t) {
     var i = THEME_CYCLE.indexOf(t);
